@@ -16,8 +16,26 @@ type State =
   | { phase: "done"; stats: ThermalStats; answer: string }
   | { phase: "error"; message: string };
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function useSpinner(active: boolean): string {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setFrame(0);
+      return;
+    }
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, [active]);
+
+  return active ? SPINNER_FRAMES[frame] : "";
+}
+
 export default function Diagnosis() {
   const [state, setState] = useState<State>({ phase: "collecting" });
+  const spinner = useSpinner(state.phase === "analyzing" || state.phase === "collecting");
 
   async function run() {
     setState({ phase: "collecting" });
@@ -49,7 +67,13 @@ export default function Diagnosis() {
   );
 
   if (state.phase === "collecting") {
-    return <Detail isLoading markdown="" navigationTitle="Heat Check: Diagnosis" />;
+    return (
+      <Detail
+        isLoading
+        markdown={`## ${spinner} Collecting system stats…`}
+        navigationTitle="Heat Check: Diagnosis"
+      />
+    );
   }
 
   if (state.phase === "error") {
@@ -67,7 +91,7 @@ export default function Diagnosis() {
   const context = formatStatsForAI(state.stats);
 
   const markdown = `
-## ${isAnalyzing ? "Analyzing…" : "Diagnosis"}
+## ${isAnalyzing ? `${spinner} Analyzing…` : "◆ Diagnosis"}
 
 ${isAnalyzing ? "*Analyzing your system stats…*" : answer}
 
