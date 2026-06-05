@@ -52,17 +52,6 @@ export default function Diagnosis() {
     return <Detail isLoading markdown="" navigationTitle="Heat Check: Diagnosis" />;
   }
 
-  if (state.phase === "analyzing") {
-    const context = formatStatsForAI(state.stats);
-    return (
-      <Detail
-        isLoading
-        markdown={`## Stats collected\n\n\`\`\`\n${context}\n\`\`\`\n\n_Analyzing…_`}
-        navigationTitle="Heat Check: Diagnosis"
-      />
-    );
-  }
-
   if (state.phase === "error") {
     return (
       <Detail
@@ -73,12 +62,30 @@ export default function Diagnosis() {
     );
   }
 
-  const { stats, answer } = state;
-  const context = formatStatsForAI(stats);
+  const isAnalyzing = state.phase === "analyzing";
+  const answer = state.phase === "done" ? state.answer : "";
+  const context = formatStatsForAI(state.stats);
 
-  const markdown = `## Diagnosis\n\n${answer}\n\n---\n\n### Raw Stats\n\n\`\`\`\n${context}\n\`\`\``;
+  const markdown = `
+## ${isAnalyzing ? "Analyzing…" : "Diagnosis"}
+
+${isAnalyzing ? "*Analyzing your system stats…*" : answer}
+
+---
+
+## System Stats
+
+\`\`\`
+${context}
+\`\`\`
+`;
 
   return (
-    <Detail markdown={markdown} navigationTitle="Heat Check: Diagnosis" actions={actions} />
+    <Detail
+      markdown={markdown}
+      isLoading={isAnalyzing}
+      navigationTitle="Heat Check: Diagnosis"
+      actions={actions}
+    />
   );
 }
