@@ -124,3 +124,27 @@ export function formatStatsForAI(stats: ThermalStats): string {
   ];
   return lines.join("\n");
 }
+
+export function formatStatsForDisplay(stats: ThermalStats): string {
+  const fmtCpu = (n: number) => `${n.toFixed(1)}%`;
+  const fmtMem = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const fmtFan = (rpm: number | null) => (rpm != null ? `${rpm.toLocaleString()} RPM` : "unavailable");
+  const fmtTemp = (t: number | null) => (t != null ? `${t.toFixed(1)}°C` : "unavailable");
+
+  const top = stats.topProcesses.slice(0, 6);
+
+  return [
+    `| Metric | Value |`,
+    `| --- | --- |`,
+    `| Fan Speed | ${fmtFan(stats.fanRpm)} |`,
+    `| CPU Temperature | ${fmtTemp(stats.cpuTempC)} |`,
+    `| Thermal Pressure | ${stats.thermalPressure} |`,
+    `| Memory Pressure | ${stats.memoryPressure} |`,
+    ``,
+    `### Top Processes`,
+    ``,
+    `| Process | CPU | Memory |`,
+    `| --- | ---: | ---: |`,
+    ...top.map((p) => `| ${p.name} | ${fmtCpu(p.cpu)} | ${fmtMem(p.memMB)} |`),
+  ].join("\n");
+}

@@ -1,6 +1,6 @@
 import { AI, Action, ActionPanel, Detail, Icon } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { collectStats, formatStatsForAI, isIStatsInstalled, type ThermalStats } from "./system";
+import { collectStats, formatStatsForAI, formatStatsForDisplay, isIStatsInstalled, type ThermalStats } from "./system";
 
 const SYSTEM_PROMPT = `You are a concise macOS system diagnostics assistant.
 Given real-time stats about a Mac's CPU, fan, temperature, and processes, explain in plain English:
@@ -88,7 +88,7 @@ export default function Diagnosis() {
 
   const isAnalyzing = state.phase === "analyzing";
   const answer = state.phase === "done" ? state.answer : "";
-  const context = formatStatsForAI(state.stats);
+  const displayStats = formatStatsForDisplay(state.stats);
 
   const markdown = `
 ## ${isAnalyzing ? `${spinner} Analyzing…` : "◆ Diagnosis"}
@@ -97,11 +97,7 @@ ${isAnalyzing ? "*Analyzing your system stats…*" : answer}
 
 ---
 
-## System Stats
-
-\`\`\`
-${context}
-\`\`\`
+${displayStats}
 `;
 
   return (
