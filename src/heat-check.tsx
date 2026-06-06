@@ -171,10 +171,10 @@ export default function HeatCheck() {
 				onAction={() => load(iStatsAvailable)}
 			/>
 			{!iStatsAvailable && !checkingIStats && (
-				<Action
-					title="Install iStats (Fan & Temp Data)"
+				<Action.OpenInBrowser
+					title="iStats Install Docs"
 					icon={Icon.Download}
-					onAction={promptInstallIStats}
+					url="https://github.com/Chris911/iStats"
 				/>
 			)}
 		</ActionPanel>
@@ -237,10 +237,10 @@ export default function HeatCheck() {
 						icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
 						actions={
 							<ActionPanel>
-								<Action
-									title="Install iStats"
+								<Action.OpenInBrowser
+									title="iStats Install Docs"
 									icon={Icon.Download}
-									onAction={promptInstallIStats}
+									url="https://github.com/Chris911/iStats"
 								/>
 								<Action
 									title="Refresh"
