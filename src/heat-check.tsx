@@ -1,283 +1,366 @@
 import {
-	Action,
-	ActionPanel,
-	Color,
-	Icon,
-	List,
+  Action,
+  ActionPanel,
+  Clipboard,
+  Color,
+  Icon,
+  List,
+  Toast,
+  confirmAlert,
+  showToast,
 } from "@raycast/api";
 import { useEffect, useState } from "react";
 import {
-	collectStats,
-	isIStatsInstalled,
-	type ProcessStat,
-	type ThermalStats,
+  collectStats,
+  isIStatsInstalled,
+  type ProcessStat,
+  type ThermalStats,
 } from "./system";
 
 // ─── color maps ───────────────────────────────────────────────────────────────
 
 const PRESSURE_COLOR: Record<ThermalStats["thermalPressure"], Color> = {
-	nominal: Color.Green,
-	moderate: Color.Blue,
-	heavy: Color.Orange,
-	critical: Color.Red,
-	unknown: Color.SecondaryText,
+  nominal: Color.Green,
+  moderate: Color.Blue,
+  heavy: Color.Orange,
+  critical: Color.Red,
+  unknown: Color.SecondaryText,
 };
 
 const MEM_PRESSURE_COLOR: Record<ThermalStats["memoryPressure"], Color> = {
-	normal: Color.Green,
-	warning: Color.Blue,
-	critical: Color.Red,
-	unknown: Color.SecondaryText,
+  normal: Color.Green,
+  warning: Color.Blue,
+  critical: Color.Red,
+  unknown: Color.SecondaryText,
 };
 
 function cpuColor(cpu: number): Color {
-	if (cpu >= 70) return Color.Red;
-	if (cpu >= 40) return Color.Orange;
-	if (cpu >= 15) return Color.Blue;
-	return Color.Green;
+  if (cpu >= 70) return Color.Red;
+  if (cpu >= 40) return Color.Orange;
+  if (cpu >= 15) return Color.Blue;
+  return Color.Green;
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function capitalize(s: string) {
-	return s.charAt(0).toUpperCase() + s.slice(1);
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function diagnosisText(stats: ThermalStats): string {
-	const top = stats.topProcesses[0];
-	if (stats.thermalPressure === "critical") {
-		return top
-			? `Critical — ${top.name} at ${top.cpu.toFixed(0)}% CPU`
-			: "Critical thermal pressure";
-	}
-	if (stats.thermalPressure === "heavy") {
-		return top
-			? `${top.name} is overloading your CPU (${top.cpu.toFixed(0)}%)`
-			: "Heavy thermal load";
-	}
-	if (top && top.cpu >= 30) {
-		return `${top.name} is the main CPU consumer (${top.cpu.toFixed(0)}%)`;
-	}
-	return "System is running cool";
+  const top = stats.topProcesses[0];
+  if (stats.thermalPressure === "critical") {
+    return top
+      ? `Critical — ${top.name} at ${top.cpu.toFixed(0)}% CPU`
+      : "Critical thermal pressure";
+  }
+  if (stats.thermalPressure === "heavy") {
+    return top
+      ? `${top.name} is overloading your CPU (${top.cpu.toFixed(0)}%)`
+      : "Heavy thermal load";
+  }
+  if (top && top.cpu >= 30) {
+    return `${top.name} is the main CPU consumer (${top.cpu.toFixed(0)}%)`;
+  }
+  return "System is running cool";
 }
 
 function diagnosisColor(stats: ThermalStats): Color {
-	return PRESSURE_COLOR[stats.thermalPressure];
+  return PRESSURE_COLOR[stats.thermalPressure];
 }
 
 // ─── subcomponents ────────────────────────────────────────────────────────────
 
 function ProcessItem({
-	proc,
-	onRefresh,
+  proc,
+  onRefresh,
 }: {
-	proc: ProcessStat;
-	onRefresh: () => void;
+  proc: ProcessStat;
+  onRefresh: () => void;
 }) {
-	return (
-		<List.Item
-			title={proc.name}
-			subtitle={`PID ${proc.pid}`}
-			accessories={[
-				{
-					tag: { value: `${proc.cpu.toFixed(1)}%`, color: cpuColor(proc.cpu) },
-					tooltip: "CPU usage",
-				},
-				{
-					text:
-						proc.memMB >= 1024
-							? `${(proc.memMB / 1024).toFixed(1)} GB`
-							: `${proc.memMB} MB`,
-					tooltip: "Memory (RSS)",
-				},
-			]}
-			actions={
-				<ActionPanel>
-					<Action
-						title="Refresh"
-						icon={Icon.RotateClockwise}
-						shortcut={{ modifiers: ["cmd"], key: "r" }}
-						onAction={onRefresh}
-					/>
-				</ActionPanel>
-			}
-		/>
-	);
+  return (
+    <List.Item
+      title={proc.name}
+      subtitle={`PID ${proc.pid}`}
+      accessories={[
+        {
+          tag: { value: `${proc.cpu.toFixed(1)}%`, color: cpuColor(proc.cpu) },
+          tooltip: "CPU usage",
+        },
+        {
+          text:
+            proc.memMB >= 1024
+              ? `${(proc.memMB / 1024).toFixed(1)} GB`
+              : `${proc.memMB} MB`,
+          tooltip: "Memory (RSS)",
+        },
+      ]}
+      actions={
+        <ActionPanel>
+          <Action
+            title="Close (SIGTERM)"
+            icon={Icon.Stop}
+            onAction={() => {
+              try {
+                process.kill(proc.pid, "SIGTERM");
+                showToast({
+                  style: Toast.Style.Success,
+                  title: `Closed ${proc.name} (PID ${proc.pid})`,
+                });
+                onRefresh();
+              } catch (e) {
+                showToast({
+                  style: Toast.Style.Failure,
+                  title: `Failed to close ${proc.name}`,
+                  message: String(e),
+                });
+              }
+            }}
+          />
+          <Action
+            title="Force Kill (SIGKILL)"
+            icon={Icon.ExclamationMark}
+            shortcut={{ modifiers: ["cmd", "opt"], key: "k" }}
+            onAction={async () => {
+              if (
+                await confirmAlert({
+                  title: `Force Kill ${proc.name}?`,
+                  message: `PID ${proc.pid}. This will immediately terminate the process.`,
+                  icon: Icon.ExclamationMark,
+                })
+              ) {
+                try {
+                  process.kill(proc.pid, "SIGKILL");
+                  showToast({
+                    style: Toast.Style.Success,
+                    title: `Killed ${proc.name} (PID ${proc.pid})`,
+                  });
+                  onRefresh();
+                } catch (e) {
+                  showToast({
+                    style: Toast.Style.Failure,
+                    title: `Failed to kill ${proc.name}`,
+                    message: String(e),
+                  });
+                }
+              }
+            }}
+          />
+          <Action
+            title="Copy PID"
+            icon={Icon.CopyClipboard}
+            shortcut={{ modifiers: ["cmd"], key: "c" }}
+            onAction={() => {
+              Clipboard.copy(String(proc.pid));
+              showToast({
+                style: Toast.Style.Success,
+                title: `Copied PID ${proc.pid}`,
+              });
+            }}
+          />
+          <Action
+            title="Copy Name"
+            icon={Icon.CopyClipboard}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+            onAction={() => {
+              Clipboard.copy(proc.name);
+              showToast({
+                style: Toast.Style.Success,
+                title: `Copied ${proc.name}`,
+              });
+            }}
+          />
+          <Action
+            title="Refresh"
+            icon={Icon.RotateClockwise}
+            shortcut={{ modifiers: ["cmd"], key: "r" }}
+            onAction={onRefresh}
+          />
+        </ActionPanel>
+      }
+    />
+  );
 }
 
 // ─── main view ────────────────────────────────────────────────────────────────
 
 export default function HeatCheck() {
-	const [stats, setStats] = useState<ThermalStats | null>(null);
-	const [loading, setLoading] = useState(true);
-	const [iStatsAvailable, setIStatsAvailable] = useState(false);
-	const [checkingIStats, setCheckingIStats] = useState(true);
+  const [stats, setStats] = useState<ThermalStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [iStatsAvailable, setIStatsAvailable] = useState(false);
+  const [checkingIStats, setCheckingIStats] = useState(true);
 
-	async function load(withIStats: boolean) {
-		setLoading(true);
-		try {
-			setStats(await collectStats(withIStats));
-		} finally {
-			setLoading(false);
-		}
-	}
+  async function load(withIStats: boolean) {
+    try {
+      setStats(await collectStats(withIStats));
+    } finally {
+      setLoading(false);
+    }
+  }
 
-	useEffect(() => {
-		isIStatsInstalled().then((installed) => {
-			setIStatsAvailable(installed);
-			setCheckingIStats(false);
-			load(installed);
-		});
-	}, []);
+  useEffect(() => {
+    isIStatsInstalled().then((installed) => {
+      setIStatsAvailable(installed);
+      setCheckingIStats(false);
+      load(installed);
+    });
+  }, []);
 
-	const refreshActions = (
-		<ActionPanel>
-			<Action
-				title="Refresh"
-				icon={Icon.RotateClockwise}
-				shortcut={{ modifiers: ["cmd"], key: "r" }}
-				onAction={() => load(iStatsAvailable)}
-			/>
-			{!iStatsAvailable && !checkingIStats && (
-				<Action.OpenInBrowser
-					title="iStats Install Docs"
-					icon={Icon.Download}
-					url="https://github.com/Chris911/iStats"
-				/>
-			)}
-		</ActionPanel>
-	);
+  // auto-refresh every 3 seconds
+  useEffect(() => {
+    if (checkingIStats) return;
+    const interval = setInterval(() => load(iStatsAvailable), 3000);
+    return () => clearInterval(interval);
+  }, [iStatsAvailable, checkingIStats]);
 
-	if (loading || stats === null) {
-		return (
-			<List isLoading navigationTitle="Heat Check" searchBarPlaceholder="" />
-		);
-	}
+  const refreshActions = (
+    <ActionPanel>
+      <Action
+        title="Refresh"
+        icon={Icon.RotateClockwise}
+        shortcut={{ modifiers: ["cmd"], key: "r" }}
+        onAction={() => load(iStatsAvailable)}
+      />
+      {!iStatsAvailable && !checkingIStats && (
+        <Action.OpenInBrowser
+          title="iStats Install Docs"
+          icon={Icon.Download}
+          url="https://github.com/Chris911/iStats"
+        />
+      )}
+    </ActionPanel>
+  );
 
-	return (
-		<List
-			navigationTitle="Heat Check"
-			searchBarPlaceholder="Filter processes…"
-			actions={refreshActions}
-		>
-			{/* ── diagnosis ── */}
-			<List.Section>
-				<List.Item
-					title={diagnosisText(stats)}
-					subtitle={[
-						stats.fanRpm != null
-							? `Fan ${stats.fanRpm.toLocaleString()} RPM`
-							: null,
-						stats.cpuTempC != null ? `${stats.cpuTempC.toFixed(0)}°C` : null,
-					]
-						.filter(Boolean)
-						.join(" · ")}
-					icon={{ source: Icon.Bolt, tintColor: diagnosisColor(stats) }}
-					accessories={[
-						{
-							tag: {
-								value: capitalize(stats.thermalPressure),
-								color: PRESSURE_COLOR[stats.thermalPressure],
-							},
-							tooltip: "Thermal pressure",
-						},
-					]}
-					actions={refreshActions}
-				/>
-			</List.Section>
+  if (loading || stats === null) {
+    return (
+      <List isLoading navigationTitle="Heat Check" searchBarPlaceholder="" />
+    );
+  }
 
-			{/* ── system metrics ── */}
-			<List.Section title="System">
-				{stats.fanRpm != null ? (
-					<List.Item
-						title="Fan Speed"
-						icon={{
-							source: Icon.Wind,
-							tintColor: stats.fanRpm > 3500 ? Color.Orange : Color.PrimaryText,
-						}}
-						accessories={[{ text: `${stats.fanRpm.toLocaleString()} RPM` }]}
-						actions={refreshActions}
-					/>
-				) : (
-					<List.Item
-						title="Fan Speed"
-						subtitle="Install iStats to see fan RPM"
-						icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
-						actions={
-							<ActionPanel>
-								<Action.OpenInBrowser
-									title="iStats Install Docs"
-									icon={Icon.Download}
-									url="https://github.com/Chris911/iStats"
-								/>
-								<Action
-									title="Refresh"
-									icon={Icon.RotateClockwise}
-									shortcut={{ modifiers: ["cmd"], key: "r" }}
-									onAction={() => load(iStatsAvailable)}
-								/>
-							</ActionPanel>
-						}
-					/>
-				)}
+  return (
+    <List
+      navigationTitle="Heat Check"
+      searchBarPlaceholder="Filter processes…"
+      actions={refreshActions}
+    >
+      {/* ── diagnosis ── */}
+      <List.Section>
+        <List.Item
+          title={diagnosisText(stats)}
+          subtitle={[
+            stats.fanRpm != null
+              ? `Fan ${stats.fanRpm.toLocaleString()} RPM`
+              : null,
+            stats.cpuTempC != null ? `${stats.cpuTempC.toFixed(0)}°C` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          icon={{ source: Icon.Bolt, tintColor: diagnosisColor(stats) }}
+          accessories={[
+            {
+              tag: {
+                value: capitalize(stats.thermalPressure),
+                color: PRESSURE_COLOR[stats.thermalPressure],
+              },
+              tooltip: "Thermal pressure",
+            },
+          ]}
+          actions={refreshActions}
+        />
+      </List.Section>
 
-				{stats.cpuTempC != null && (
-					<List.Item
-						title="CPU Temperature"
-						icon={{
-							source: Icon.Temperature,
-							tintColor: PRESSURE_COLOR[stats.thermalPressure],
-						}}
-						accessories={[{ text: `${stats.cpuTempC.toFixed(1)}°C` }]}
-						actions={refreshActions}
-					/>
-				)}
+      {/* ── system metrics ── */}
+      <List.Section title="System">
+        {stats.fanRpm != null ? (
+          <List.Item
+            title="Fan Speed"
+            icon={{
+              source: Icon.Wind,
+              tintColor: stats.fanRpm > 3500 ? Color.Orange : Color.PrimaryText,
+            }}
+            accessories={[{ text: `${stats.fanRpm.toLocaleString()} RPM` }]}
+            actions={refreshActions}
+          />
+        ) : (
+          <List.Item
+            title="Fan Speed"
+            subtitle="Install iStats to see fan RPM"
+            icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
+            actions={
+              <ActionPanel>
+                <Action.OpenInBrowser
+                  title="iStats Install Docs"
+                  icon={Icon.Download}
+                  url="https://github.com/Chris911/iStats"
+                />
+                <Action
+                  title="Refresh"
+                  icon={Icon.RotateClockwise}
+                  shortcut={{ modifiers: ["cmd"], key: "r" }}
+                  onAction={() => load(iStatsAvailable)}
+                />
+              </ActionPanel>
+            }
+          />
+        )}
 
-				<List.Item
-					title="Thermal Pressure"
-					icon={{
-						source: Icon.CircleFilled,
-						tintColor: PRESSURE_COLOR[stats.thermalPressure],
-					}}
-					accessories={[
-						{
-							tag: {
-								value: capitalize(stats.thermalPressure),
-								color: PRESSURE_COLOR[stats.thermalPressure],
-							},
-						},
-					]}
-					actions={refreshActions}
-				/>
+        {stats.cpuTempC != null && (
+          <List.Item
+            title="CPU Temperature"
+            icon={{
+              source: Icon.Temperature,
+              tintColor: PRESSURE_COLOR[stats.thermalPressure],
+            }}
+            accessories={[{ text: `${stats.cpuTempC.toFixed(1)}°C` }]}
+            actions={refreshActions}
+          />
+        )}
 
-				<List.Item
-					title="Memory Pressure"
-					icon={{
-						source: Icon.MemoryChip,
-						tintColor: MEM_PRESSURE_COLOR[stats.memoryPressure],
-					}}
-					accessories={[
-						{
-							tag: {
-								value: capitalize(stats.memoryPressure),
-								color: MEM_PRESSURE_COLOR[stats.memoryPressure],
-							},
-						},
-					]}
-					actions={refreshActions}
-				/>
-			</List.Section>
+        <List.Item
+          title="Thermal Pressure"
+          icon={{
+            source: Icon.CircleFilled,
+            tintColor: PRESSURE_COLOR[stats.thermalPressure],
+          }}
+          accessories={[
+            {
+              tag: {
+                value: capitalize(stats.thermalPressure),
+                color: PRESSURE_COLOR[stats.thermalPressure],
+              },
+            },
+          ]}
+          actions={refreshActions}
+        />
 
-			{/* ── top processes ── */}
-			<List.Section title="Top Processes">
-				{stats.topProcesses.map((proc) => (
-					<ProcessItem
-						key={proc.pid}
-						proc={proc}
-						onRefresh={() => load(iStatsAvailable)}
-					/>
-				))}
-			</List.Section>
-		</List>
-	);
+        <List.Item
+          title="Memory Pressure"
+          icon={{
+            source: Icon.MemoryChip,
+            tintColor: MEM_PRESSURE_COLOR[stats.memoryPressure],
+          }}
+          accessories={[
+            {
+              tag: {
+                value: capitalize(stats.memoryPressure),
+                color: MEM_PRESSURE_COLOR[stats.memoryPressure],
+              },
+            },
+          ]}
+          actions={refreshActions}
+        />
+      </List.Section>
+
+      {/* ── top processes ── */}
+      <List.Section title="Top Processes">
+        {stats.topProcesses.map((proc) => (
+          <ProcessItem
+            key={proc.pid}
+            proc={proc}
+            onRefresh={() => load(iStatsAvailable)}
+          />
+        ))}
+      </List.Section>
+    </List>
+  );
 }
