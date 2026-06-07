@@ -1,18 +1,13 @@
 import {
 	Action,
 	ActionPanel,
-	Alert,
 	Color,
-	confirmAlert,
 	Icon,
 	List,
-	showToast,
-	Toast,
 } from "@raycast/api";
 import { useEffect, useState } from "react";
 import {
 	collectStats,
-	installIStats,
 	isIStatsInstalled,
 	type ProcessStat,
 	type ThermalStats,
@@ -124,33 +119,6 @@ export default function HeatCheck() {
 			setStats(await collectStats(withIStats));
 		} finally {
 			setLoading(false);
-		}
-	}
-
-	async function promptInstallIStats() {
-		const ok = await confirmAlert({
-			title: "Install iStats for fan & temp data?",
-			message:
-				"iStats is a Ruby gem that reads fan RPM and CPU temperature without sudo.\n\nInstall via: gem install iStats --user-install",
-			primaryAction: { title: "Install", style: Alert.ActionStyle.Default },
-			dismissAction: { title: "Skip" },
-		});
-		if (!ok) return;
-
-		const toast = await showToast({
-			style: Toast.Style.Animated,
-			title: "Installing iStats…",
-		});
-		try {
-			await installIStats();
-			toast.style = Toast.Style.Success;
-			toast.title = "iStats installed";
-			setIStatsAvailable(true);
-			load(true);
-		} catch {
-			toast.style = Toast.Style.Failure;
-			toast.title = "Install failed";
-			toast.message = "Run manually: gem install iStats --user-install";
 		}
 	}
 
