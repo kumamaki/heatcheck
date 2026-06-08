@@ -368,7 +368,7 @@ function headlineFor(
 function detailLine(snap: SystemSnapshot): string {
   const fanPct = fanLoadPct(snap);
   return [
-    snap.cpuTempC != null ? `${snap.cpuTempC.toFixed(0)}°C` : null,
+    snap.temps.cpuMaxC != null ? `${snap.temps.cpuMaxC.toFixed(0)}°C` : null,
     fanPct != null ? `fan ${fanPct.toFixed(0)}%` : null,
     snap.isCharging
       ? "charging"
