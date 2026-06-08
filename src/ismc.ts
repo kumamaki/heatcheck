@@ -48,7 +48,10 @@ export async function ensureISmc(): Promise<string> {
 
 async function isExecutable(path: string): Promise<boolean> {
   try {
-    return (await stat(path)).isFile();
+    const stats = await stat(path);
+    // A regular file is not enough: a half-written or chmod-stripped file at the
+    // cache path would pass isFile() and then fail at spawn. Require an exec bit.
+    return stats.isFile() && (stats.mode & 0o111) !== 0;
   } catch {
     return false;
   }
