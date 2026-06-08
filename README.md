@@ -11,24 +11,29 @@ Two commands:
 
 ## Prerequisites
 
-- **Raycast Pro** — required for the AI Diagnosis command
-- **iStats** (optional) — install via `gem install iStats` for fan speed and CPU temperature. Falls back gracefully if missing (uses `ps` and `memory_pressure` for the remaining data).
+**Raycast Pro** is required for the AI Diagnosis command. Heat Check itself runs without it.
+
+## Sensor data and iSMC
+
+Fan RPM and CPU temperature come from [iSMC](https://github.com/dkorunic/iSMC), a third-party GPL-3.0 sensor CLI. Heat Check does not bundle it. On first run it downloads a pinned release (`v0.16.5`) from iSMC's GitHub, checks the download against a SHA256 hash baked into the source, and caches the binary under the extension's support directory. Reading the sensors then runs that binary as a separate process.
+
+If the download fails or the sensors can't be read, fan and temperature show as unavailable and the rest of the data (processes, memory pressure) keeps working.
 
 ## Installation
 
 ```bash
 git clone <repo-url>
 cd heatcheck
-npm install
-ray develop
+pnpm install
+pnpm dev
 ```
 
 ## Development
 
 ```bash
-npm run dev     # Watch mode
-npm run build   # Production build
-npm run lint    # Lint
+pnpm dev      # Watch mode (ray develop)
+pnpm build    # Production build
+pnpm lint     # Lint
 ```
 
 ## License
