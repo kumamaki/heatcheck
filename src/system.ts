@@ -1,3 +1,4 @@
+import os from "node:os";
 import { execa } from "execa";
 import { ensureISmc } from "./ismc";
 
@@ -12,7 +13,7 @@ export type MemoryPressure = "normal" | "warning" | "critical" | "unknown";
 export interface ProcessStat {
   pid: number;
   name: string;
-  cpu: number; // percent
+  cpu: number; // percent of total CPU capacity (0–100), normalized across cores
   memMB: number;
 }
 
@@ -31,6 +32,11 @@ export interface ThermalStats {
 async function getTopProcesses(): Promise<ProcessStat[]> {
   const { stdout } = await execa("ps", ["-Ao", "pid=,pcpu=,rss=,args=", "-r"]);
 
+  // ps pcpu sums across logical cores, so it tops out at cores×100% (e.g. 1000%
+  // on a 10-core Mac). Divide by core count to express each process as a share
+  // of total machine capacity — a single 0–100% scale the gauges expect.
+  const coreCount = os.cpus().length || 1;
+
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -38,14 +44,19 @@ async function getTopProcesses(): Promise<ProcessStat[]> {
     .map((line) => {
       const parts = line.split(/\s+/);
       const pid = parseInt(parts[0], 10);
-      const cpu = parseFloat(parts[1] ?? "0");
+      const rawCpu = parseFloat(parts[1] ?? "0");
       const rssKB = parseInt(parts[2] ?? "0", 10);
       const args = parts.slice(3).join(" ");
       // args = executable path + flags; first " -" marks start of flags
       const flagIdx = args.indexOf(" -");
       const exePath = flagIdx > 0 ? args.slice(0, flagIdx).trim() : args;
       const name = exePath.split("/").pop() ?? "unknown";
-      return { pid, name, cpu, memMB: Math.round(rssKB / 1024) };
+      return {
+        pid,
+        name,
+        cpu: rawCpu / coreCount,
+        memMB: Math.round(rssKB / 1024),
+      };
     })
     .filter((p) => !isNaN(p.pid) && p.cpu > 0)
     .slice(0, 12);
@@ -179,11 +190,12 @@ export function formatStatsForAI(stats: ThermalStats): string {
     `Thermal pressure: ${stats.thermalPressure}`,
     `Memory pressure: ${stats.memoryPressure}`,
     "",
-    "Top processes by CPU:",
+    "Top processes by CPU (% of total machine CPU capacity, 0–100):",
     ...stats.topProcesses
       .slice(0, 8)
       .map(
-        (p) => `  ${p.name} (PID ${p.pid}): ${p.cpu}% CPU, ${p.memMB} MB RAM`,
+        (p) =>
+          `  ${p.name} (PID ${p.pid}): ${p.cpu.toFixed(1)}% CPU, ${p.memMB} MB RAM`,
       ),
   ];
   return lines.join("\n");
