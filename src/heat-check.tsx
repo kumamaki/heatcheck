@@ -10,19 +10,24 @@ import {
   showToast,
 } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { collectStats, type ProcessStat, type ThermalStats } from "./system";
+import {
+  buildVerdict,
+  collectSnapshot,
+  fanLoadPct,
+  type ProcessStat,
+  type SystemSnapshot,
+  type Verdict,
+} from "./system";
 
 // ─── color maps ───────────────────────────────────────────────────────────────
 
-const PRESSURE_COLOR: Record<ThermalStats["thermalPressure"], Color> = {
-  nominal: Color.Green,
-  moderate: Color.Blue,
-  heavy: Color.Orange,
-  critical: Color.Red,
-  unknown: Color.SecondaryText,
+const LEVEL_COLOR: Record<Verdict["level"], Color> = {
+  cool: Color.Green,
+  busy: Color.Blue,
+  hot: Color.Orange,
 };
 
-const MEM_PRESSURE_COLOR: Record<ThermalStats["memoryPressure"], Color> = {
+const MEM_PRESSURE_COLOR: Record<SystemSnapshot["memoryPressure"], Color> = {
   normal: Color.Green,
   warning: Color.Blue,
   critical: Color.Red,
@@ -42,26 +47,11 @@ function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function diagnosisText(stats: ThermalStats): string {
-  const top = stats.topProcesses[0];
-  if (stats.thermalPressure === "critical") {
-    return top
-      ? `Critical — ${top.name} at ${top.cpu.toFixed(0)}% CPU`
-      : "Critical thermal pressure";
-  }
-  if (stats.thermalPressure === "heavy") {
-    return top
-      ? `${top.name} is overloading your CPU (${top.cpu.toFixed(0)}%)`
-      : "Heavy thermal load";
-  }
-  if (top && top.cpu >= 30) {
-    return `${top.name} is the main CPU consumer (${top.cpu.toFixed(0)}%)`;
-  }
-  return "System is running cool";
-}
-
-function diagnosisColor(stats: ThermalStats): Color {
-  return PRESSURE_COLOR[stats.thermalPressure];
+function powerLabel(snap: SystemSnapshot): string {
+  if (snap.isCharging) return "Charging";
+  if (snap.powerSource === "ac") return "AC, not charging";
+  if (snap.powerSource === "battery") return "On battery";
+  return "Unknown";
 }
 
 // ─── subcomponents ────────────────────────────────────────────────────────────
@@ -80,7 +70,7 @@ function ProcessItem({
       accessories={[
         {
           tag: { value: `${proc.cpu.toFixed(1)}%`, color: cpuColor(proc.cpu) },
-          tooltip: "CPU usage",
+          tooltip: "CPU usage (share of whole machine)",
         },
         {
           text:
@@ -180,12 +170,12 @@ function ProcessItem({
 // ─── main view ────────────────────────────────────────────────────────────────
 
 export default function HeatCheck() {
-  const [stats, setStats] = useState<ThermalStats | null>(null);
+  const [snap, setSnap] = useState<SystemSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function load() {
     try {
-      setStats(await collectStats());
+      setSnap(await collectSnapshot());
     } finally {
       setLoading(false);
     }
@@ -212,11 +202,15 @@ export default function HeatCheck() {
     </ActionPanel>
   );
 
-  if (loading || stats === null) {
+  if (loading || snap === null) {
     return (
       <List isLoading navigationTitle="Heat Check" searchBarPlaceholder="" />
     );
   }
+
+  const verdict = buildVerdict(snap);
+  const levelColor = LEVEL_COLOR[verdict.level];
+  const fanPct = fanLoadPct(snap);
 
   return (
     <List
@@ -224,26 +218,16 @@ export default function HeatCheck() {
       searchBarPlaceholder="Filter processes…"
       actions={refreshActions}
     >
-      {/* ── diagnosis ── */}
+      {/* ── verdict ── */}
       <List.Section>
         <List.Item
-          title={diagnosisText(stats)}
-          subtitle={[
-            stats.fanRpm != null
-              ? `Fan ${stats.fanRpm.toLocaleString()} RPM`
-              : null,
-            stats.cpuTempC != null ? `${stats.cpuTempC.toFixed(0)}°C` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          icon={{ source: Icon.Bolt, tintColor: diagnosisColor(stats) }}
+          title={verdict.headline}
+          subtitle={verdict.detail}
+          icon={{ source: Icon.Bolt, tintColor: levelColor }}
           accessories={[
             {
-              tag: {
-                value: capitalize(stats.thermalPressure),
-                color: PRESSURE_COLOR[stats.thermalPressure],
-              },
-              tooltip: "Thermal pressure",
+              tag: { value: capitalize(verdict.level), color: levelColor },
+              tooltip: "Overall state",
             },
           ]}
           actions={refreshActions}
@@ -252,53 +236,70 @@ export default function HeatCheck() {
 
       {/* ── system metrics ── */}
       <List.Section title="System">
-        {stats.fanRpm != null ? (
+        {snap.cpuTempC != null && (
           <List.Item
-            title="Fan Speed"
+            title="Temperature"
+            icon={{ source: Icon.Temperature, tintColor: levelColor }}
+            accessories={[{ text: `${snap.cpuTempC.toFixed(1)}°C` }]}
+            actions={refreshActions}
+          />
+        )}
+
+        {snap.fanRpm != null ? (
+          <List.Item
+            title="Fan"
             icon={{
               source: Icon.Wind,
-              tintColor: stats.fanRpm > 3500 ? Color.Orange : Color.PrimaryText,
+              tintColor:
+                fanPct != null && fanPct >= 85
+                  ? Color.Orange
+                  : Color.PrimaryText,
             }}
-            accessories={[{ text: `${stats.fanRpm.toLocaleString()} RPM` }]}
+            accessories={[
+              {
+                text:
+                  fanPct != null
+                    ? `${snap.fanRpm.toLocaleString()} RPM · ${fanPct.toFixed(0)}%`
+                    : `${snap.fanRpm.toLocaleString()} RPM`,
+                tooltip: "Current speed and share of rated maximum",
+              },
+            ]}
             actions={refreshActions}
           />
         ) : (
           <List.Item
-            title="Fan Speed"
+            title="Fan"
             subtitle={
-              stats.sensorsAvailable ? "No fan detected" : "Sensors unavailable"
+              snap.sensorsAvailable ? "No fan detected" : "Sensors unavailable"
             }
             icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
             actions={refreshActions}
           />
         )}
 
-        {stats.cpuTempC != null && (
-          <List.Item
-            title="CPU Temperature"
-            icon={{
-              source: Icon.Temperature,
-              tintColor: PRESSURE_COLOR[stats.thermalPressure],
-            }}
-            accessories={[{ text: `${stats.cpuTempC.toFixed(1)}°C` }]}
-            actions={refreshActions}
-          />
-        )}
-
         <List.Item
-          title="Thermal Pressure"
-          icon={{
-            source: Icon.CircleFilled,
-            tintColor: PRESSURE_COLOR[stats.thermalPressure],
-          }}
+          title="CPU Load"
+          icon={{ source: Icon.Gauge, tintColor: levelColor }}
           accessories={[
             {
-              tag: {
-                value: capitalize(stats.thermalPressure),
-                color: PRESSURE_COLOR[stats.thermalPressure],
-              },
+              text: `${snap.loadPct.toFixed(0)}% of ${snap.coreCount} cores`,
+              tooltip: "Machine-wide 1-minute load average",
             },
           ]}
+          actions={refreshActions}
+        />
+
+        <List.Item
+          title="Power"
+          icon={{
+            source: snap.isCharging
+              ? Icon.BatteryCharging
+              : snap.powerSource === "ac"
+                ? Icon.Plug
+                : Icon.Battery,
+            tintColor: Color.PrimaryText,
+          }}
+          accessories={[{ text: powerLabel(snap) }]}
           actions={refreshActions}
         />
 
@@ -306,13 +307,13 @@ export default function HeatCheck() {
           title="Memory Pressure"
           icon={{
             source: Icon.MemoryChip,
-            tintColor: MEM_PRESSURE_COLOR[stats.memoryPressure],
+            tintColor: MEM_PRESSURE_COLOR[snap.memoryPressure],
           }}
           accessories={[
             {
               tag: {
-                value: capitalize(stats.memoryPressure),
-                color: MEM_PRESSURE_COLOR[stats.memoryPressure],
+                value: capitalize(snap.memoryPressure),
+                color: MEM_PRESSURE_COLOR[snap.memoryPressure],
               },
             },
           ]}
@@ -322,7 +323,7 @@ export default function HeatCheck() {
 
       {/* ── top processes ── */}
       <List.Section title="Top Processes">
-        {stats.topProcesses.map((proc) => (
+        {snap.topProcesses.map((proc) => (
           <ProcessItem key={proc.pid} proc={proc} onRefresh={load} />
         ))}
       </List.Section>

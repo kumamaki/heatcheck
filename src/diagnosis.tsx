@@ -1,10 +1,11 @@
 import { AI, Action, ActionPanel, Detail, Icon } from "@raycast/api";
 import { useEffect, useState } from "react";
 import {
-  collectStats,
+  buildVerdict,
+  collectSnapshot,
   formatStatsForAI,
   formatStatsForDisplay,
-  type ThermalStats,
+  type SystemSnapshot,
 } from "./system";
 
 const SYSTEM_PROMPT = `You are a concise macOS system diagnostics assistant.
@@ -13,12 +14,12 @@ Given real-time stats about a Mac's CPU, fan, temperature, and processes, explai
 2. Whether it is a concern
 3. One actionable suggestion if relevant
 
-Be direct. No bullet points for short answers. Two to four sentences max.`;
+Apple Silicon Macs run at 90–100°C under load by design, so a high temperature alone is not a problem — weigh CPU load, fan effort, and what the processes are doing. Be direct. No bullet points for short answers. Two to four sentences max.`;
 
 type State =
   | { phase: "collecting" }
-  | { phase: "analyzing"; stats: ThermalStats }
-  | { phase: "done"; stats: ThermalStats; answer: string }
+  | { phase: "analyzing"; stats: SystemSnapshot }
+  | { phase: "done"; stats: SystemSnapshot; answer: string }
   | { phase: "error"; message: string };
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -50,10 +51,10 @@ export default function Diagnosis() {
   async function run() {
     setState({ phase: "collecting" });
     try {
-      const stats = await collectStats();
+      const stats = await collectSnapshot();
       setState({ phase: "analyzing", stats });
 
-      const context = formatStatsForAI(stats);
+      const context = formatStatsForAI(stats, buildVerdict(stats));
       const answer = await AI.ask(
         `${SYSTEM_PROMPT}\n\nCurrent system stats:\n${context}\n\nWhat's going on?`,
         {
