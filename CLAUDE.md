@@ -21,18 +21,27 @@ There is no test suite. `tsc` is not run standalone — `ray build`/`ray develop
 
 Two Raycast `view` commands, each backed by one `.tsx` file whose name matches the command `name` in `package.json` and whose **default export** is the React component:
 
-- `src/heat-check.tsx` — `heat-check` command. A `List` of system metrics and top processes, with kill/copy actions and a 3-second auto-refresh.
-- `src/diagnosis.tsx` — `diagnosis` command. Collects the same stats, then feeds them to Raycast AI (`AI.ask`) for a plain-English explanation. **Requires Raycast Pro.**
+- `src/heat-check.tsx` — `heat-check` command. A verdict-first `List`: a hero line stating what's going on, then system metrics (temperature, fan RPM and % of max, CPU load, power/charging, memory pressure) and top processes, with kill/copy actions and a 3-second auto-refresh.
+- `src/diagnosis.tsx` — `diagnosis` command. Collects the same snapshot, then feeds it (plus the verdict) to Raycast AI (`AI.ask`) for a plain-English explanation. **Requires Raycast Pro.**
 
-`src/system.ts` is the shared data layer — both commands import from it. It owns every shell-out and all the types (`ThermalStats`, `ProcessStat`, the pressure unions). It does no rendering. Data sources, all via `execa`:
+`src/system.ts` is the shared data layer — both commands import from it. It owns every shell-out, all the types (`SystemSnapshot`, `Verdict`, `HeatCause`, `ProcessStat`, the level/pressure unions), and the verdict logic. It emits no JSX. Two halves:
 
-- `ps -Ao pid=,pcpu=,rss=,args= -r` → top processes (fast point-in-time snapshot, ~100ms vs ~2s for `top -l 2`). Process name is parsed out of the full `args` column — the parser splits the exe path from flags at the first `" -"`.
+- `collectSnapshot()` → `SystemSnapshot`: pure measurements, no judgement.
+- `buildVerdict(snap)` → `Verdict` (`{ level, cause, headline, detail }`): the computed read. The headline is generated from the attributed `cause` (`cpu` hog | `busy` | `charging` | `ambient` | `none`), so a process not using meaningful CPU can never read as "overloading".
+
+Data sources (`execa` shell-outs unless noted):
+
+- `ps -Ao pid=,pcpu=,rss=,args= -r` → top processes (fast point-in-time snapshot, ~100ms vs ~2s for `top -l 2`). Process name is parsed out of the full `args` column — the parser splits the exe path from flags at the first `" -"`. `pcpu` is summed across cores, so it's divided by `os.cpus().length` to a 0–100% machine share.
+- `os.loadavg()` (no shell-out) → machine-wide 1-minute load, reported as `loadPct` (% of cores).
 - `memory_pressure` → memory-pressure level (string-matched).
-- `iSMC temp -o json` / `iSMC fans -o json` → CPU temp and fan RPM, parsed from JSON.
+- `pmset -g ps` → power source and charging state (charging matched with a `not`-excluding lookbehind).
+- `iSMC temp -o json` / `iSMC fans -o json` → CPU temp, fan RPM, and fan rated max, parsed from JSON.
 
 **iSMC (`dkorunic/iSMC`) is a GPL-3.0 sensor CLI we download, never bundle.** `src/ismc.ts` owns acquisition: on first run it fetches a pinned universal release tarball from the project's GitHub (a server we don't control), verifies it against a SHA256 hash hardcoded in source, extracts just the binary, and caches it at `<environment.supportPath>/bin/iSMC-<version>`. The binary ships ad-hoc signed (runs on Apple Silicon) and is fetched over the network (no quarantine xattr → no Gatekeeper prompt); we invoke it as a separate process. Bumping the version means changing `VERSION` + `TARBALL_SHA256` together — the version is in the cache filename, so a bump self-invalidates.
 
-When the download fails (offline first run) or sensors are unreadable, `getSensorData` returns `null` fan/temp with `sensorsAvailable: false`; the UI degrades gracefully. Sensor selection is parser-side: fan RPM picks the actual-speed SMC key (`F<n>Ac`, not max/min/target); CPU temp tiers from decoded `CPU …` sensors → Apple Silicon `tdie` → hottest plausible sensor. `thermalPressure` is derived from CPU temp when available, else inferred from the top process's CPU%. Treat the `ps`/`memory_pressure`/iSMC-JSON formats as load-bearing — the parsers depend on their exact columns, labels, and SMC key conventions.
+When the download fails (offline first run) or sensors are unreadable, `getSensorData` returns `null` fan/temp/max with `sensorsAvailable: false`; the UI degrades gracefully. Sensor selection is parser-side: `pickRpm` reads the actual-speed key (`F<n>Ac`) for current RPM and the max key (`F<n>Mx`) for the rated ceiling, ignoring min/target; CPU temp tiers from decoded `CPU …` sensors → Apple Silicon `tdie` → hottest plausible sensor. Treat the `ps`/`memory_pressure`/`pmset`/iSMC-JSON formats as load-bearing — the parsers depend on their exact columns, labels, and SMC key conventions.
+
+The verdict deliberately does **not** alarm on temperature alone: Apple Silicon runs 90–100°C under load by design, so `buildVerdict` keys severity off CPU load and fan effort (% of rated max), and uses temp only as a tiebreaker. OS-true throttle detection is absent on purpose — `pmset -g therm` is dead on Apple Silicon (verified under full load), and the real signal (`ProcessInfo.thermalState`) needs a compiled helper, tracked in beads.
 
 Process termination uses Node's `process.kill(pid, signal)` directly (SIGTERM / SIGKILL), not a shell `kill`.
 
