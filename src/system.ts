@@ -353,9 +353,9 @@ function headlineFor(
     case "cpu":
       return `${cause.process.name} is overloading your CPU (${cause.process.cpu.toFixed(0)}%)`;
     case "busy":
-      return `Working hard — load spread across processes (${snap.loadPct.toFixed(0)}%)`;
+      return `Working hard, load spread across processes (${snap.loadPct.toFixed(0)}%)`;
     case "charging":
-      return "Warm from charging, not from load";
+      return "Warm from charging, CPU is quiet";
     case "ambient":
       return thermal === "hot"
         ? "Running hot, but nothing is hammering the CPU"

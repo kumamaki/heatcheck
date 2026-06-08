@@ -14,7 +14,7 @@ Given real-time stats about a Mac's CPU, fan, temperature, and processes, explai
 2. Whether it is a concern
 3. One actionable suggestion if relevant
 
-Apple Silicon Macs run at 90–100°C under load by design, so a high temperature alone is not a problem — weigh CPU load, fan effort, and what the processes are doing. Be direct. No bullet points for short answers. Two to four sentences max.`;
+Apple Silicon Macs run at 90–100°C under load by design, so a high temperature alone is not a problem. Weigh CPU load, fan effort, and what the processes are doing. Be direct. No bullet points for short answers. Two to four sentences max.`;
 
 type State =
   | { phase: "collecting" }
@@ -111,7 +111,7 @@ export default function Diagnosis() {
   const markdown = `
 ## ${isAnalyzing ? `${spinner} Analyzing…` : "◆ Diagnosis"}
 
-${isAnalyzing ? "*Analyzing your system stats…*" : answer}
+${isAnalyzing ? "*Reading temperatures, fans, and processes…*" : answer}
 
 ---
 
