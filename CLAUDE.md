@@ -1,30 +1,38 @@
-## Issue tracking — beads (bd)
+# CLAUDE.md
 
-This project uses [beads](https://github.com/steveyegge/beads) for all task tracking.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-### Rules
-- `bd` is the source of truth for all work — never use markdown TODO lists, and never use TodoWrite/TaskCreate to *track* work that should live in `bd`.
-- File a `bd` issue **before** writing code; claim it (`bd update <id> --claim`) when you start.
-- Once a bead is claimed, use `TodoWrite` to break it into in-session sub-tasks (or load the breakdown from the bead's `--design`/`--notes` if it's already there). TodoWrite is for the *execution slice* of one bead; `bd` is for everything that outlives the session.
-- Before saying "done" at end of a session, close every completed issue: `bd close <id1> <id2> …`.
+A Raycast extension (macOS) that shows what's burning your CPU and spinning your fan.
 
-### Commands
+## Commands
 
-**Finding work**
-- `bd ready` — issues ready to work (no blockers)
-- `bd list --status=open` / `--status=in_progress`
-- `bd show <id>` — full issue with dependencies
+```bash
+pnpm dev      # ray develop — hot-reload into the local Raycast app
+pnpm build    # ray build — production build
+pnpm lint     # ray lint
+pnpm fix-lint # ray lint --fix
+```
 
-**Creating & updating**
-- `bd create --title="…" --description="…" --type=task|bug|feature|epic|chore --priority=2`
-  - Priority is `0`–`4` (0=critical, 2=medium, 4=backlog). Not "high"/"low".
-- `bd update <id> --claim` — atomic claim
-- `bd update <id> --title/--description/--notes/--design "…"` — edit fields inline
-- `bd close <id1> <id2> …` — close one or many; add `--reason="…"` if useful
-- ⚠ Never use `bd edit` — it opens `$EDITOR` and blocks the agent.
+There is no test suite. `tsc` is not run standalone — `ray build`/`ray develop` typecheck as part of their pipeline. ESLint config is `@raycast/eslint-config` (re-exported from `eslint.config.js`).
 
-`bd` also handles dependencies (`bd dep add`, `bd blocked`), deferring work (`bd defer`), and superseding issues (`bd supersede`). Run `bd --help` or `bd <command> --help` for syntax.
+`raycast-env.d.ts` is auto-generated from `package.json` — never edit it by hand. To add a command or a preference, edit the `commands` array in `package.json` and the file regenerates on the next `ray` run.
 
+## Architecture
+
+Two Raycast `view` commands, each backed by one `.tsx` file whose name matches the command `name` in `package.json` and whose **default export** is the React component:
+
+- `src/heat-check.tsx` — `heat-check` command. A `List` of system metrics and top processes, with kill/copy actions and a 3-second auto-refresh.
+- `src/diagnosis.tsx` — `diagnosis` command. Collects the same stats, then feeds them to Raycast AI (`AI.ask`) for a plain-English explanation. **Requires Raycast Pro.**
+
+`src/system.ts` is the shared data layer — both commands import from it. It owns every shell-out and all the types (`ThermalStats`, `ProcessStat`, the pressure unions). It does no rendering. Data sources, all via `execa`:
+
+- `ps -Ao pid=,pcpu=,rss=,args= -r` → top processes (fast point-in-time snapshot, ~100ms vs ~2s for `top -l 2`). Process name is parsed out of the full `args` column — the parser splits the exe path from flags at the first `" -"`.
+- `memory_pressure` → memory-pressure level (string-matched).
+- `istats all --no-graphs` → fan RPM and CPU temp, **regex-scraped** from its text output.
+
+**iStats is an optional Ruby gem** (`gem install iStats`), not a JS dependency. Fan RPM and CPU temp come only from it; when it is absent both are `null` and the UI degrades gracefully (shows an install-docs link). `collectStats(withIStats)` takes a boolean so callers skip the iStats probe entirely when it isn't installed. `thermalPressure` is derived from CPU temp when available, else inferred from the top process's CPU%. Treat the `ps`/`istats`/`memory_pressure` output formats as load-bearing — the parsers depend on their exact columns and labels.
+
+Process termination uses Node's `process.kill(pid, signal)` directly (SIGTERM / SIGKILL), not a shell `kill`.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
