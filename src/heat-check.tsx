@@ -13,7 +13,8 @@ import { useEffect, useState } from "react";
 import {
   buildVerdict,
   collectSnapshot,
-  fanLoadPct,
+  fanEffortPct,
+  type FanReading,
   type ProcessStat,
   type SystemSnapshot,
   type Verdict,
@@ -24,12 +25,13 @@ import {
 const LEVEL_COLOR: Record<Verdict["level"], Color> = {
   cool: Color.Green,
   busy: Color.Blue,
-  hot: Color.Orange,
+  warm: Color.Orange,
+  hot: Color.Red,
 };
 
 const MEM_PRESSURE_COLOR: Record<SystemSnapshot["memoryPressure"], Color> = {
   normal: Color.Green,
-  warning: Color.Blue,
+  warning: Color.Orange,
   critical: Color.Red,
   unknown: Color.SecondaryText,
 };
@@ -39,6 +41,33 @@ function cpuColor(cpu: number): Color {
   if (cpu >= 40) return Color.Orange;
   if (cpu >= 15) return Color.Blue;
   return Color.Green;
+}
+
+// Each metric colors its own row, and only when elevated — a normal reading stays
+// neutral so the one thing that is actually warm draws the eye. undefined means
+// "no tint": the value renders in default text and the icon in SecondaryText.
+
+// Yellow reads poorly on a light background, so the scale skips it: orange for
+// "warm", red for "hot". Apple Silicon runs hot by design, so the temperature
+// bands start at 85°C / 95°C — the same thresholds the verdict uses.
+function tempColor(c: number): Color | undefined {
+  if (c >= 95) return Color.Red;
+  if (c >= 85) return Color.Orange;
+  return undefined;
+}
+
+// CPU load as a share of all cores: half the machine is notable, 80%+ is heavy.
+function loadColor(pct: number): Color | undefined {
+  if (pct >= 80) return Color.Red;
+  if (pct >= 50) return Color.Orange;
+  return undefined;
+}
+
+// A fan's effort against its own rated max, matching the verdict's fan bands.
+function fanColor(effort: number): Color | undefined {
+  if (effort >= 85) return Color.Red;
+  if (effort >= 70) return Color.Orange;
+  return undefined;
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -55,6 +84,75 @@ function powerLabel(snap: SystemSnapshot): string {
 }
 
 // ─── subcomponents ────────────────────────────────────────────────────────────
+
+function FanItem({
+  fan,
+  label,
+  onRefresh,
+}: {
+  fan: FanReading;
+  label: string;
+  onRefresh: () => void;
+}) {
+  const effort = fanEffortPct(fan);
+  const color = fanColor(effort);
+  return (
+    <List.Item
+      title={label}
+      icon={{ source: Icon.Wind, tintColor: color ?? Color.SecondaryText }}
+      accessories={[
+        {
+          text: {
+            value: `${fan.rpm.toLocaleString()} RPM · ${effort.toFixed(0)}%`,
+            color,
+          },
+          tooltip: "Current speed and share of this fan's rated maximum",
+        },
+      ]}
+      actions={
+        <ActionPanel>
+          <Action
+            title="Refresh"
+            icon={Icon.RotateClockwise}
+            shortcut={{ modifiers: ["cmd"], key: "r" }}
+            onAction={onRefresh}
+          />
+        </ActionPanel>
+      }
+    />
+  );
+}
+
+function TempItem({
+  title,
+  icon,
+  celsius,
+  onRefresh,
+}: {
+  title: string;
+  icon: Icon;
+  celsius: number;
+  onRefresh: () => void;
+}) {
+  const color = tempColor(celsius);
+  return (
+    <List.Item
+      title={title}
+      icon={{ source: icon, tintColor: color ?? Color.SecondaryText }}
+      accessories={[{ text: { value: `${celsius.toFixed(0)}°C`, color } }]}
+      actions={
+        <ActionPanel>
+          <Action
+            title="Refresh"
+            icon={Icon.RotateClockwise}
+            shortcut={{ modifiers: ["cmd"], key: "r" }}
+            onAction={onRefresh}
+          />
+        </ActionPanel>
+      }
+    />
+  );
+}
 
 function ProcessItem({
   proc,
@@ -210,7 +308,7 @@ export default function HeatCheck() {
 
   const verdict = buildVerdict(snap);
   const levelColor = LEVEL_COLOR[verdict.level];
-  const fanPct = fanLoadPct(snap);
+  const t = snap.temps;
 
   return (
     <List
@@ -234,38 +332,87 @@ export default function HeatCheck() {
         />
       </List.Section>
 
-      {/* ── system metrics ── */}
-      <List.Section title="System">
-        {snap.cpuTempC != null && (
-          <List.Item
-            title="Temperature"
-            icon={{ source: Icon.Temperature, tintColor: levelColor }}
-            accessories={[{ text: `${snap.cpuTempC.toFixed(1)}°C` }]}
-            actions={refreshActions}
+      {/* ── temperatures ── */}
+      <List.Section title="Temperatures">
+        {t.cpuMaxC != null &&
+          (() => {
+            const color = tempColor(t.cpuMaxC);
+            return (
+              <List.Item
+                title="CPU"
+                icon={{
+                  source: Icon.Temperature,
+                  tintColor: color ?? Color.SecondaryText,
+                }}
+                accessories={[
+                  {
+                    text: {
+                      value:
+                        t.cpuAvgC != null
+                          ? `${t.cpuMaxC.toFixed(0)}°C max · ${t.cpuAvgC.toFixed(0)}°C avg`
+                          : `${t.cpuMaxC.toFixed(0)}°C`,
+                      color,
+                    },
+                    tooltip: "Hottest CPU sensor and die average",
+                  },
+                ]}
+                actions={refreshActions}
+              />
+            );
+          })()}
+
+        {t.gpuC != null && (
+          <TempItem
+            title="GPU"
+            icon={Icon.Temperature}
+            celsius={t.gpuC}
+            onRefresh={load}
           />
         )}
 
-        {snap.fanRpm != null ? (
+        {t.ssdC != null && (
+          <TempItem
+            title="SSD"
+            icon={Icon.HardDrive}
+            celsius={t.ssdC}
+            onRefresh={load}
+          />
+        )}
+
+        {t.batteryC != null && (
+          <TempItem
+            title="Battery"
+            icon={Icon.Battery}
+            celsius={t.batteryC}
+            onRefresh={load}
+          />
+        )}
+
+        {t.cpuMaxC == null && (
           <List.Item
-            title="Fan"
-            icon={{
-              source: Icon.Wind,
-              tintColor:
-                fanPct != null && fanPct >= 85
-                  ? Color.Orange
-                  : Color.PrimaryText,
-            }}
-            accessories={[
-              {
-                text:
-                  fanPct != null
-                    ? `${snap.fanRpm.toLocaleString()} RPM · ${fanPct.toFixed(0)}%`
-                    : `${snap.fanRpm.toLocaleString()} RPM`,
-                tooltip: "Current speed and share of rated maximum",
-              },
-            ]}
+            title="Temperature"
+            subtitle={
+              snap.sensorsAvailable
+                ? "No sensors detected"
+                : "Sensors unavailable"
+            }
+            icon={{ source: Icon.Temperature, tintColor: Color.SecondaryText }}
             actions={refreshActions}
           />
+        )}
+      </List.Section>
+
+      {/* ── cooling & system ── */}
+      <List.Section title="System">
+        {snap.fans.length > 0 ? (
+          snap.fans.map((fan, i) => (
+            <FanItem
+              key={i}
+              fan={fan}
+              label={snap.fans.length > 1 ? `Fan ${i + 1}` : "Fan"}
+              onRefresh={load}
+            />
+          ))
         ) : (
           <List.Item
             title="Fan"
@@ -279,10 +426,16 @@ export default function HeatCheck() {
 
         <List.Item
           title="CPU Load"
-          icon={{ source: Icon.Gauge, tintColor: levelColor }}
+          icon={{
+            source: Icon.Gauge,
+            tintColor: loadColor(snap.loadPct) ?? Color.SecondaryText,
+          }}
           accessories={[
             {
-              text: `${snap.loadPct.toFixed(0)}% of ${snap.coreCount} cores`,
+              text: {
+                value: `${snap.loadPct.toFixed(0)}% of ${snap.coreCount} cores`,
+                color: loadColor(snap.loadPct),
+              },
               tooltip: "Machine-wide 1-minute load average",
             },
           ]}

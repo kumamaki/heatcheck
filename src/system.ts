@@ -2,7 +2,10 @@ import os from "node:os";
 import { execa } from "execa";
 import { ensureISmc } from "./ismc";
 
-export type VerdictLevel = "cool" | "busy" | "hot";
+// Ordered by severity: cool < busy < warm < hot. Heat outranks compute — a
+// machine working hard but staying cool ("busy") is calmer than one whose fans
+// are climbing ("warm"), which is what a user actually notices and asks about.
+export type VerdictLevel = "cool" | "busy" | "warm" | "hot";
 export type MemoryPressure = "normal" | "warning" | "critical" | "unknown";
 export type PowerSource = "ac" | "battery" | "unknown";
 
@@ -11,6 +14,24 @@ export interface ProcessStat {
   name: string;
   cpu: number; // percent of total CPU capacity (0–100), normalized across cores
   memMB: number;
+}
+
+// One physical fan: current speed paired with its own rated ceiling, so each
+// fan's effort is a share of its own max (the two fans have different maxima).
+export interface FanReading {
+  rpm: number;
+  maxRpm: number;
+}
+
+// The temperatures worth showing. cpuMaxC drives the verdict (hottest CPU
+// sensor); the rest are for display and AI context. Any can be null on a chip
+// whose sensors we do not recognise — the UI hides null rows.
+export interface TempReadings {
+  cpuMaxC: number | null; // hottest CPU sensor — the verdict's thermal input
+  cpuAvgC: number | null; // CPU Die Average
+  gpuC: number | null;
+  ssdC: number | null;
+  batteryC: number | null;
 }
 
 // What is actually driving the heat right now. The headline is generated from
@@ -24,9 +45,8 @@ export type HeatCause =
 
 // Everything we measure. No judgement lives here — that is buildVerdict's job.
 export interface SystemSnapshot {
-  cpuTempC: number | null;
-  fanRpm: number | null;
-  fanMaxRpm: number | null;
+  temps: TempReadings;
+  fans: FanReading[]; // one entry per physical fan; empty when none/unavailable
   loadPct: number; // machine-wide 1-min load as % of cores (0–100)
   coreCount: number;
   powerSource: PowerSource;
@@ -122,16 +142,27 @@ interface ISmcReading {
 }
 type ISmcReadout = Record<string, ISmcReading>;
 
-function pickRpm(fans: ISmcReadout, suffix: "Ac" | "Mx"): number | null {
+function parseFans(fans: ISmcReadout): FanReading[] {
   // Each fan reports four readings (actual/max/min/target) keyed F<n>Ac/Mx/Mn/Tg.
-  // Match the requested suffix and, across multiple fans, report the fastest —
-  // pairing current speed with rated max so we can show how hard the fan works.
-  const re = new RegExp(`^F\\d+${suffix}$`);
-  const rpms = Object.values(fans)
-    .filter((r) => typeof r.key === "string" && re.test(r.key))
-    .map((r) => r.quantity)
-    .filter((rpm): rpm is number => typeof rpm === "number" && rpm > 0);
-  return rpms.length > 0 ? Math.max(...rpms) : null;
+  // Group by fan index <n> and pair current speed (Ac) with rated max (Mx) so
+  // each fan's effort is a share of its own ceiling — the fans differ.
+  const byIndex = new Map<number, { rpm?: number; maxRpm?: number }>();
+  for (const r of Object.values(fans)) {
+    const m = typeof r.key === "string" ? /^F(\d+)(Ac|Mx)$/.exec(r.key) : null;
+    if (!m || typeof r.quantity !== "number" || r.quantity <= 0) continue;
+    const idx = parseInt(m[1], 10);
+    const entry = byIndex.get(idx) ?? {};
+    if (m[2] === "Ac") entry.rpm = r.quantity;
+    else entry.maxRpm = r.quantity;
+    byIndex.set(idx, entry);
+  }
+  return [...byIndex.entries()]
+    .sort(([a], [b]) => a - b)
+    .filter((e): e is [number, { rpm: number; maxRpm: number }] => {
+      const [, v] = e;
+      return typeof v.rpm === "number" && typeof v.maxRpm === "number";
+    })
+    .map(([, v]) => ({ rpm: v.rpm, maxRpm: v.maxRpm }));
 }
 
 // There is no single canonical "CPU temperature" sensor, so we tier by
@@ -157,10 +188,45 @@ function parseCpuTempC(temps: ISmcReadout): number | null {
   );
 }
 
+// Hottest °C sensor whose friendly name matches `re`. iSMC exposes many probes
+// per component (GPU 1…21, SSD 2…8, Battery 1…3); the hottest is the meaningful
+// one to surface. Names are Apple Silicon conventions — an unrecognised chip
+// yields null and the row is hidden rather than guessed.
+function hottestNamed(temps: ISmcReadout, re: RegExp): number | null {
+  const vals = Object.entries(temps)
+    .filter(
+      ([name, r]) =>
+        r.unit === "°C" &&
+        typeof r.quantity === "number" &&
+        r.quantity > 0 &&
+        r.quantity < 130 &&
+        re.test(name),
+    )
+    .map(([, r]) => r.quantity as number);
+  return vals.length > 0 ? Math.max(...vals) : null;
+}
+
+function parseTemps(temps: ISmcReadout): TempReadings {
+  return {
+    cpuMaxC: parseCpuTempC(temps),
+    cpuAvgC: hottestNamed(temps, /^cpu die average$/i),
+    gpuC: hottestNamed(temps, /^gpu \d+$/i), // core probes, not fabric/heatsink
+    ssdC: hottestNamed(temps, /^ssd \d+$/i), // not "SSD Proximity"/"Controller"
+    batteryC: hottestNamed(temps, /^battery \d+$/i),
+  };
+}
+
+const NO_TEMPS: TempReadings = {
+  cpuMaxC: null,
+  cpuAvgC: null,
+  gpuC: null,
+  ssdC: null,
+  batteryC: null,
+};
+
 async function getSensorData(): Promise<{
-  fanRpm: number | null;
-  fanMaxRpm: number | null;
-  cpuTempC: number | null;
+  temps: TempReadings;
+  fans: FanReading[];
   sensorsAvailable: boolean;
 }> {
   try {
@@ -172,9 +238,8 @@ async function getSensorData(): Promise<{
     const temps = JSON.parse(tempRes.stdout) as ISmcReadout;
     const fans = JSON.parse(fanRes.stdout) as ISmcReadout;
     return {
-      cpuTempC: parseCpuTempC(temps),
-      fanRpm: pickRpm(fans, "Ac"),
-      fanMaxRpm: pickRpm(fans, "Mx"),
+      temps: parseTemps(temps),
+      fans: parseFans(fans),
       sensorsAvailable: true,
     };
   } catch (err) {
@@ -182,12 +247,7 @@ async function getSensorData(): Promise<{
     // sensors unreadable. The UI surfaces this via sensorsAvailable; not silent.
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[iSMC] sensor read failed: <${message}>`);
-    return {
-      fanRpm: null,
-      fanMaxRpm: null,
-      cpuTempC: null,
-      sensorsAvailable: false,
-    };
+    return { temps: NO_TEMPS, fans: [], sensorsAvailable: false };
   }
 }
 
@@ -205,9 +265,8 @@ export async function collectSnapshot(): Promise<SystemSnapshot> {
   const loadPct = Math.min(100, (os.loadavg()[0] / coreCount) * 100);
 
   return {
-    cpuTempC: sensors.cpuTempC,
-    fanRpm: sensors.fanRpm,
-    fanMaxRpm: sensors.fanMaxRpm,
+    temps: sensors.temps,
+    fans: sensors.fans,
     loadPct,
     coreCount,
     powerSource: power.powerSource,
@@ -218,50 +277,78 @@ export async function collectSnapshot(): Promise<SystemSnapshot> {
   };
 }
 
+// A single fan's effort as a share of its own rated max.
+export function fanEffortPct(fan: FanReading): number {
+  return Math.min(100, (fan.rpm / fan.maxRpm) * 100);
+}
+
+// The hardest-working fan's effort — the verdict's cooling input.
 export function fanLoadPct(snap: SystemSnapshot): number | null {
-  if (snap.fanRpm == null || !snap.fanMaxRpm) return null;
-  return Math.min(100, (snap.fanRpm / snap.fanMaxRpm) * 100);
+  if (snap.fans.length === 0) return null;
+  return Math.max(...snap.fans.map(fanEffortPct));
 }
 
 // A process counts as a hog at 60% of the whole machine; total load reads "busy"
-// at half the machine; the cooling system reads "stressed" when the fan is within
-// 85% of its rated max or the die clears 95°C (high even for Apple Silicon).
+// at half the machine. Cooling is read on two bands: "warm" once the fan passes
+// 70% of its rated max or the die clears 85°C, "stressed" at 85% / 95°C (high
+// even for Apple Silicon). The warm band gives the verdict a step between cool
+// and hot instead of snapping straight across.
 const HOG_PCT = 60;
 const BUSY_LOAD_PCT = 50;
+const FAN_WARM_PCT = 70;
 const FAN_STRESS_PCT = 85;
+const WARM_TEMP_C = 85;
 const HOT_TEMP_C = 95;
+
+type ThermalState = "none" | "warm" | "hot";
 
 export function buildVerdict(snap: SystemSnapshot): Verdict {
   const top = snap.topProcesses[0];
   const fanPct = fanLoadPct(snap);
+  const temp = snap.temps.cpuMaxC;
   const hog = top && top.cpu >= HOG_PCT ? top : null;
-  const coolingStressed =
-    (fanPct != null && fanPct >= FAN_STRESS_PCT) ||
-    (snap.cpuTempC != null && snap.cpuTempC >= HOT_TEMP_C);
   const busy = snap.loadPct >= BUSY_LOAD_PCT;
 
-  const level: VerdictLevel = coolingStressed
-    ? "hot"
-    : hog || busy
-      ? "busy"
-      : "cool";
+  const thermal: ThermalState =
+    (fanPct != null && fanPct >= FAN_STRESS_PCT) ||
+    (temp != null && temp >= HOT_TEMP_C)
+      ? "hot"
+      : (fanPct != null && fanPct >= FAN_WARM_PCT) ||
+          (temp != null && temp >= WARM_TEMP_C)
+        ? "warm"
+        : "none";
 
+  // Heat outranks compute: surface a climbing fan over a cool-but-busy machine.
+  const level: VerdictLevel =
+    thermal === "hot"
+      ? "hot"
+      : thermal === "warm"
+        ? "warm"
+        : hog || busy
+          ? "busy"
+          : "cool";
+
+  // Name the actionable compute driver first; otherwise explain the heat.
   let cause: HeatCause;
   if (hog) cause = { kind: "cpu", process: hog };
   else if (busy) cause = { kind: "busy" };
-  else if (coolingStressed && snap.isCharging) cause = { kind: "charging" };
-  else if (coolingStressed) cause = { kind: "ambient" };
+  else if (thermal !== "none" && snap.isCharging) cause = { kind: "charging" };
+  else if (thermal !== "none") cause = { kind: "ambient" };
   else cause = { kind: "none" };
 
   return {
     level,
     cause,
-    headline: headlineFor(cause, snap),
+    headline: headlineFor(cause, snap, thermal),
     detail: detailLine(snap),
   };
 }
 
-function headlineFor(cause: HeatCause, snap: SystemSnapshot): string {
+function headlineFor(
+  cause: HeatCause,
+  snap: SystemSnapshot,
+  thermal: ThermalState,
+): string {
   switch (cause.kind) {
     case "cpu":
       return `${cause.process.name} is overloading your CPU (${cause.process.cpu.toFixed(0)}%)`;
@@ -270,7 +357,9 @@ function headlineFor(cause: HeatCause, snap: SystemSnapshot): string {
     case "charging":
       return "Warm from charging, not from load";
     case "ambient":
-      return "Running hot, but nothing is hammering the CPU";
+      return thermal === "hot"
+        ? "Running hot, but nothing is hammering the CPU"
+        : "Warming up, but nothing is hammering the CPU";
     case "none":
       return "Running cool";
   }
@@ -297,11 +386,28 @@ export function formatStatsForAI(
   snap: SystemSnapshot,
   verdict: Verdict,
 ): string {
-  const fanPct = fanLoadPct(snap);
+  const t = snap.temps;
+  const tempParts = [
+    t.cpuMaxC != null ? `CPU ${t.cpuMaxC.toFixed(0)}°C max` : null,
+    t.cpuAvgC != null ? `${t.cpuAvgC.toFixed(0)}°C avg` : null,
+    t.gpuC != null ? `GPU ${t.gpuC.toFixed(0)}°C` : null,
+    t.ssdC != null ? `SSD ${t.ssdC.toFixed(0)}°C` : null,
+    t.batteryC != null ? `battery ${t.batteryC.toFixed(0)}°C` : null,
+  ].filter(Boolean);
+  const fanLine =
+    snap.fans.length > 0
+      ? snap.fans
+          .map(
+            (f, i) =>
+              `fan ${i + 1} ${f.rpm} RPM (${fanEffortPct(f).toFixed(0)}% of max)`,
+          )
+          .join(", ")
+      : "unavailable";
+
   const lines: string[] = [
     `Verdict: ${verdict.level} — ${verdict.headline}`,
-    `CPU temperature: ${snap.cpuTempC != null ? `${snap.cpuTempC}°C` : "unavailable"} (Apple Silicon runs 90–100°C under load by design; high temp alone is not a problem)`,
-    `Fan: ${snap.fanRpm != null ? `${snap.fanRpm} RPM` : "unavailable"}${fanPct != null ? ` (${fanPct.toFixed(0)}% of max)` : ""}`,
+    `Temperatures: ${tempParts.length > 0 ? tempParts.join(", ") : "unavailable"} (Apple Silicon runs 90–100°C under load by design; high temp alone is not a problem)`,
+    `Fans: ${fanLine}`,
     `Total CPU load: ${snap.loadPct.toFixed(0)}% across ${snap.coreCount} cores`,
     `Power: ${snap.powerSource}${snap.isCharging ? ", charging" : ""}`,
     `Memory pressure: ${snap.memoryPressure}`,
@@ -321,15 +427,37 @@ export function formatStatsForDisplay(snap: SystemSnapshot): string {
   const fmtCpu = (n: number) => `${n.toFixed(1)}%`;
   const fmtMem = (mb: number) =>
     mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
-  const fanPct = fanLoadPct(snap);
+  const fmtTemp = (c: number | null) =>
+    c != null ? `${c.toFixed(1)}°C` : null;
+  const t = snap.temps;
+
+  const cpuTemp =
+    t.cpuMaxC != null
+      ? `${t.cpuMaxC.toFixed(1)}°C max${t.cpuAvgC != null ? ` · ${t.cpuAvgC.toFixed(1)}°C avg` : ""}`
+      : "unavailable";
+
+  const tempRows = [
+    `| CPU | ${cpuTemp} |`,
+    fmtTemp(t.gpuC) ? `| GPU | ${fmtTemp(t.gpuC)} |` : null,
+    fmtTemp(t.ssdC) ? `| SSD | ${fmtTemp(t.ssdC)} |` : null,
+    fmtTemp(t.batteryC) ? `| Battery | ${fmtTemp(t.batteryC)} |` : null,
+  ].filter(Boolean);
+
+  const fanRows =
+    snap.fans.length > 0
+      ? snap.fans.map(
+          (f, i) =>
+            `| Fan ${i + 1} | ${f.rpm.toLocaleString()} RPM (${fanEffortPct(f).toFixed(0)}%) |`,
+        )
+      : [`| Fan | unavailable |`];
 
   const top = snap.topProcesses.slice(0, 6);
 
   return [
     `| Metric | Value |`,
     `| --- | --- |`,
-    `| Temperature | ${snap.cpuTempC != null ? `${snap.cpuTempC.toFixed(1)}°C` : "unavailable"} |`,
-    `| Fan | ${snap.fanRpm != null ? `${snap.fanRpm.toLocaleString()} RPM${fanPct != null ? ` (${fanPct.toFixed(0)}%)` : ""}` : "unavailable"} |`,
+    ...tempRows,
+    ...fanRows,
     `| CPU load | ${snap.loadPct.toFixed(0)}% of ${snap.coreCount} cores |`,
     `| Power | ${snap.powerSource}${snap.isCharging ? ", charging" : ""} |`,
     `| Memory pressure | ${snap.memoryPressure} |`,
