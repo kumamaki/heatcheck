@@ -4,7 +4,6 @@ import {
   collectStats,
   formatStatsForAI,
   formatStatsForDisplay,
-  isIStatsInstalled,
   type ThermalStats,
 } from "./system";
 
@@ -51,8 +50,7 @@ export default function Diagnosis() {
   async function run() {
     setState({ phase: "collecting" });
     try {
-      const withIStats = await isIStatsInstalled();
-      const stats = await collectStats(withIStats);
+      const stats = await collectStats();
       setState({ phase: "analyzing", stats });
 
       const context = formatStatsForAI(stats);

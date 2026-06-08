@@ -10,12 +10,7 @@ import {
   showToast,
 } from "@raycast/api";
 import { useEffect, useState } from "react";
-import {
-  collectStats,
-  isIStatsInstalled,
-  type ProcessStat,
-  type ThermalStats,
-} from "./system";
+import { collectStats, type ProcessStat, type ThermalStats } from "./system";
 
 // ─── color maps ───────────────────────────────────────────────────────────────
 
@@ -187,31 +182,24 @@ function ProcessItem({
 export default function HeatCheck() {
   const [stats, setStats] = useState<ThermalStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [iStatsAvailable, setIStatsAvailable] = useState(false);
-  const [checkingIStats, setCheckingIStats] = useState(true);
 
-  async function load(withIStats: boolean) {
+  async function load() {
     try {
-      setStats(await collectStats(withIStats));
+      setStats(await collectStats());
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    isIStatsInstalled().then((installed) => {
-      setIStatsAvailable(installed);
-      setCheckingIStats(false);
-      load(installed);
-    });
+    load();
   }, []);
 
   // auto-refresh every 3 seconds
   useEffect(() => {
-    if (checkingIStats) return;
-    const interval = setInterval(() => load(iStatsAvailable), 3000);
+    const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
-  }, [iStatsAvailable, checkingIStats]);
+  }, []);
 
   const refreshActions = (
     <ActionPanel>
@@ -219,15 +207,8 @@ export default function HeatCheck() {
         title="Refresh"
         icon={Icon.RotateClockwise}
         shortcut={{ modifiers: ["cmd"], key: "r" }}
-        onAction={() => load(iStatsAvailable)}
+        onAction={load}
       />
-      {!iStatsAvailable && !checkingIStats && (
-        <Action.OpenInBrowser
-          title="iStats Install Docs"
-          icon={Icon.Download}
-          url="https://github.com/Chris911/iStats"
-        />
-      )}
     </ActionPanel>
   );
 
@@ -284,23 +265,11 @@ export default function HeatCheck() {
         ) : (
           <List.Item
             title="Fan Speed"
-            subtitle="Install iStats to see fan RPM"
-            icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
-            actions={
-              <ActionPanel>
-                <Action.OpenInBrowser
-                  title="iStats Install Docs"
-                  icon={Icon.Download}
-                  url="https://github.com/Chris911/iStats"
-                />
-                <Action
-                  title="Refresh"
-                  icon={Icon.RotateClockwise}
-                  shortcut={{ modifiers: ["cmd"], key: "r" }}
-                  onAction={() => load(iStatsAvailable)}
-                />
-              </ActionPanel>
+            subtitle={
+              stats.sensorsAvailable ? "No fan detected" : "Sensors unavailable"
             }
+            icon={{ source: Icon.Wind, tintColor: Color.SecondaryText }}
+            actions={refreshActions}
           />
         )}
 
@@ -354,11 +323,7 @@ export default function HeatCheck() {
       {/* ── top processes ── */}
       <List.Section title="Top Processes">
         {stats.topProcesses.map((proc) => (
-          <ProcessItem
-            key={proc.pid}
-            proc={proc}
-            onRefresh={() => load(iStatsAvailable)}
-          />
+          <ProcessItem key={proc.pid} proc={proc} onRefresh={load} />
         ))}
       </List.Section>
     </List>

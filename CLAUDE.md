@@ -28,9 +28,11 @@ Two Raycast `view` commands, each backed by one `.tsx` file whose name matches t
 
 - `ps -Ao pid=,pcpu=,rss=,args= -r` → top processes (fast point-in-time snapshot, ~100ms vs ~2s for `top -l 2`). Process name is parsed out of the full `args` column — the parser splits the exe path from flags at the first `" -"`.
 - `memory_pressure` → memory-pressure level (string-matched).
-- `istats all --no-graphs` → fan RPM and CPU temp, **regex-scraped** from its text output.
+- `iSMC temp -o json` / `iSMC fans -o json` → CPU temp and fan RPM, parsed from JSON.
 
-**iStats is an optional Ruby gem** (`gem install iStats`), not a JS dependency. Fan RPM and CPU temp come only from it; when it is absent both are `null` and the UI degrades gracefully (shows an install-docs link). `collectStats(withIStats)` takes a boolean so callers skip the iStats probe entirely when it isn't installed. `thermalPressure` is derived from CPU temp when available, else inferred from the top process's CPU%. Treat the `ps`/`istats`/`memory_pressure` output formats as load-bearing — the parsers depend on their exact columns and labels.
+**iSMC (`dkorunic/iSMC`) is a GPL-3.0 sensor CLI we download, never bundle.** `src/ismc.ts` owns acquisition: on first run it fetches a pinned universal release tarball from the project's GitHub (a server we don't control), verifies it against a SHA256 hash hardcoded in source, extracts just the binary, and caches it at `<environment.supportPath>/bin/iSMC-<version>`. The binary ships ad-hoc signed (runs on Apple Silicon) and is fetched over the network (no quarantine xattr → no Gatekeeper prompt); we invoke it as a separate process. Bumping the version means changing `VERSION` + `TARBALL_SHA256` together — the version is in the cache filename, so a bump self-invalidates.
+
+When the download fails (offline first run) or sensors are unreadable, `getSensorData` returns `null` fan/temp with `sensorsAvailable: false`; the UI degrades gracefully. Sensor selection is parser-side: fan RPM picks the actual-speed SMC key (`F<n>Ac`, not max/min/target); CPU temp tiers from decoded `CPU …` sensors → Apple Silicon `tdie` → hottest plausible sensor. `thermalPressure` is derived from CPU temp when available, else inferred from the top process's CPU%. Treat the `ps`/`memory_pressure`/iSMC-JSON formats as load-bearing — the parsers depend on their exact columns, labels, and SMC key conventions.
 
 Process termination uses Node's `process.kill(pid, signal)` directly (SIGTERM / SIGKILL), not a shell `kill`.
 

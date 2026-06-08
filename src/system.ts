@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { ensureISmc } from "./ismc";
 
 export type ThermalPressure =
   | "nominal"
@@ -21,21 +22,7 @@ export interface ThermalStats {
   thermalPressure: ThermalPressure;
   memoryPressure: MemoryPressure;
   topProcesses: ProcessStat[];
-  iStatsAvailable: boolean;
-}
-
-export async function isIStatsInstalled(): Promise<boolean> {
-  try {
-    await execa("istats", ["--version"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function installIStats(): Promise<void> {
-  // --user-install avoids needing sudo
-  await execa("gem", ["install", "iStats", "--user-install"]);
+  sensorsAvailable: boolean;
 }
 
 // ps gives a fast point-in-time snapshot (~100ms vs ~2s for top -l 2).
@@ -76,22 +63,76 @@ async function getMemoryPressure(): Promise<MemoryPressure> {
   }
 }
 
-async function getIStatsData(): Promise<{
+// iSMC `temp`/`fans -o json` emit a flat map of friendly sensor name → reading.
+// Float-typed sensors (every temp and fan we care about) carry a parsed numeric
+// `quantity` and a `unit` ("°C", "RPM"); we read those rather than the raw value.
+interface ISmcReading {
+  key?: string;
+  type?: string;
+  value?: string;
+  quantity?: number;
+  unit?: string;
+}
+type ISmcReadout = Record<string, ISmcReading>;
+
+function parseFanRpm(fans: ISmcReadout): number | null {
+  // Each fan reports four readings (actual/max/min/target). Select only the
+  // actual current speed by SMC key — F<n>Ac — so we never mistake a fan's
+  // max-rated RPM for its live RPM. Across multiple fans, report the fastest.
+  const rpms = Object.values(fans)
+    .filter((r) => typeof r.key === "string" && /^F\d+Ac$/.test(r.key))
+    .map((r) => r.quantity)
+    .filter((rpm): rpm is number => typeof rpm === "number" && rpm > 0);
+  return rpms.length > 0 ? Math.max(...rpms) : null;
+}
+
+// There is no single canonical "CPU temperature" sensor, so we tier by
+// reliability. Both Intel SMC and Apple Silicon expose sensors iSMC decodes with
+// a "CPU …" name prefix (CPU Diode/Core/Package on Intel; CPU Die/Performance/
+// Efficiency on Apple Silicon) — prefer the hottest of those. Failing that, fall
+// back to Apple Silicon PMU die sensors (tdie), then to the hottest plausible
+// sensor overall, so an uncatalogued chip still yields a sane number, not null.
+function parseCpuTempC(temps: ISmcReadout): number | null {
+  const sensors = Object.entries(temps)
+    .filter(([, r]) => r.unit === "°C" && typeof r.quantity === "number")
+    .map(([name, r]) => ({ name, c: r.quantity as number }))
+    .filter((s) => s.c > 0 && s.c < 130); // drop implausible / raw sp78 readings
+  if (sensors.length === 0) return null;
+
+  const hottest = (pool: { c: number }[]) =>
+    pool.length > 0 ? Math.max(...pool.map((s) => s.c)) : null;
+
+  return (
+    hottest(sensors.filter((s) => /^cpu\b/i.test(s.name))) ??
+    hottest(sensors.filter((s) => /\btdie\d*\b/i.test(s.name))) ??
+    hottest(sensors)
+  );
+}
+
+async function getSensorData(): Promise<{
   fanRpm: number | null;
   cpuTempC: number | null;
+  sensorsAvailable: boolean;
 }> {
   try {
-    const { stdout } = await execa("istats", ["all", "--no-graphs"]);
-    // "CPU temp:               58.31°C"
-    const tempMatch = stdout.match(/CPU temp:\s*([\d.]+)/i);
-    // "Fan 0 speed:            1280 RPM"
-    const fanMatch = stdout.match(/Fan\s+\d+\s+speed:\s+(\d+)\s+RPM/i);
+    const bin = await ensureISmc();
+    const [tempRes, fanRes] = await Promise.all([
+      execa(bin, ["temp", "-o", "json"]),
+      execa(bin, ["fans", "-o", "json"]),
+    ]);
+    const temps = JSON.parse(tempRes.stdout) as ISmcReadout;
+    const fans = JSON.parse(fanRes.stdout) as ISmcReadout;
     return {
-      cpuTempC: tempMatch ? parseFloat(tempMatch[1]) : null,
-      fanRpm: fanMatch ? parseInt(fanMatch[1], 10) : null,
+      cpuTempC: parseCpuTempC(temps),
+      fanRpm: parseFanRpm(fans),
+      sensorsAvailable: true,
     };
-  } catch {
-    return { fanRpm: null, cpuTempC: null };
+  } catch (err) {
+    // Expected degraded mode: offline on first run (binary not yet cached) or
+    // sensors unreadable. The UI surfaces this via sensorsAvailable; not silent.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[iSMC] sensor read failed: <${message}>`);
+    return { fanRpm: null, cpuTempC: null, sensorsAvailable: false };
   }
 }
 
@@ -111,25 +152,23 @@ function deriveThermalPressure(
   return "nominal";
 }
 
-export async function collectStats(withIStats: boolean): Promise<ThermalStats> {
-  const [processes, memoryPressure, istats] = await Promise.all([
+export async function collectStats(): Promise<ThermalStats> {
+  const [processes, memoryPressure, sensors] = await Promise.all([
     getTopProcesses(),
     getMemoryPressure(),
-    withIStats
-      ? getIStatsData()
-      : Promise.resolve({ fanRpm: null, cpuTempC: null }),
+    getSensorData(),
   ]);
 
   return {
-    fanRpm: istats.fanRpm,
-    cpuTempC: istats.cpuTempC,
+    fanRpm: sensors.fanRpm,
+    cpuTempC: sensors.cpuTempC,
     thermalPressure: deriveThermalPressure(
-      istats.cpuTempC,
+      sensors.cpuTempC,
       processes[0]?.cpu ?? 0,
     ),
     memoryPressure,
     topProcesses: processes,
-    iStatsAvailable: withIStats,
+    sensorsAvailable: sensors.sensorsAvailable,
   };
 }
 
