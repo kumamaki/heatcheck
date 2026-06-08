@@ -23,6 +23,12 @@ const TARBALL_SHA256 =
 const BIN_DIR = join(environment.supportPath, "bin");
 const BIN_PATH = join(BIN_DIR, `iSMC-${VERSION}`);
 
+// Upper bounds so a stalled GitHub fetch or a wedged tar can never hang the
+// caller (heat-check auto-refreshes every 3s). The download covers a one-time
+// multi-MB fetch on a slow connection; extraction is local and quick.
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const EXTRACT_TIMEOUT_MS = 10_000;
+
 // Concurrent callers (heat-check auto-refreshes every 3s) must not kick off
 // parallel downloads on the very first run; share one in-flight promise.
 let downloadInFlight: Promise<string> | null = null;
@@ -58,7 +64,9 @@ async function isExecutable(path: string): Promise<boolean> {
 }
 
 async function downloadAndVerify(): Promise<string> {
-  const res = await fetch(TARBALL_URL);
+  const res = await fetch(TARBALL_URL, {
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(
       `iSMC download failed: HTTP <${res.status}> from <${TARBALL_URL}>`,
@@ -81,7 +89,9 @@ async function downloadAndVerify(): Promise<string> {
   const extractedPath = join(BIN_DIR, "iSMC");
   try {
     await writeFile(tarPath, tarball);
-    await execa("tar", ["xzf", tarPath, "-C", BIN_DIR, "iSMC"]);
+    await execa("tar", ["xzf", tarPath, "-C", BIN_DIR, "iSMC"], {
+      timeout: EXTRACT_TIMEOUT_MS,
+    });
     await rename(extractedPath, BIN_PATH);
     await chmod(BIN_PATH, 0o755);
   } finally {

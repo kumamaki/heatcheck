@@ -2,6 +2,12 @@ import os from "node:os";
 import { execa } from "execa";
 import { ensureISmc } from "./ismc";
 
+// Every measurement shell-out is bounded so one wedged process can't hang a
+// snapshot (the heat-check view collects on a 3s loop). A timeout makes execa
+// reject; getMemoryPressure/getPowerState/getSensorData already degrade in their
+// own catch, so a slow sensor reads as "unavailable" rather than freezing.
+const CMD_TIMEOUT_MS = 5000;
+
 // Ordered by severity: cool < busy < warm < hot. Heat outranks compute — a
 // machine working hard but staying cool ("busy") is calmer than one whose fans
 // are climbing ("warm"), which is what a user actually notices and asks about.
@@ -67,7 +73,9 @@ export interface Verdict {
 // -A all processes, -o custom columns, = suffix suppresses headers, -r sort by CPU desc.
 // args= last so variable-length paths do not break column parsing
 async function getTopProcesses(coreCount: number): Promise<ProcessStat[]> {
-  const { stdout } = await execa("ps", ["-Ao", "pid=,pcpu=,rss=,args=", "-r"]);
+  const { stdout } = await execa("ps", ["-Ao", "pid=,pcpu=,rss=,args=", "-r"], {
+    timeout: CMD_TIMEOUT_MS,
+  });
 
   // ps pcpu sums across logical cores, so it tops out at cores×100% (e.g. 1000%
   // on a 10-core Mac). Divide by core count to express each process as a share
@@ -99,7 +107,9 @@ async function getTopProcesses(coreCount: number): Promise<ProcessStat[]> {
 
 async function getMemoryPressure(): Promise<MemoryPressure> {
   try {
-    const { stdout } = await execa("memory_pressure");
+    const { stdout } = await execa("memory_pressure", {
+      timeout: CMD_TIMEOUT_MS,
+    });
     const lower = stdout.toLowerCase();
     if (lower.includes("critical")) return "critical";
     if (lower.includes("warn")) return "warning";
@@ -116,7 +126,9 @@ async function getPowerState(): Promise<{
   isCharging: boolean;
 }> {
   try {
-    const { stdout } = await execa("pmset", ["-g", "ps"]);
+    const { stdout } = await execa("pmset", ["-g", "ps"], {
+      timeout: CMD_TIMEOUT_MS,
+    });
     const powerSource: PowerSource = /AC Power/.test(stdout)
       ? "ac"
       : /Battery Power/.test(stdout)
@@ -232,8 +244,8 @@ async function getSensorData(): Promise<{
   try {
     const bin = await ensureISmc();
     const [tempRes, fanRes] = await Promise.all([
-      execa(bin, ["temp", "-o", "json"]),
-      execa(bin, ["fans", "-o", "json"]),
+      execa(bin, ["temp", "-o", "json"], { timeout: CMD_TIMEOUT_MS }),
+      execa(bin, ["fans", "-o", "json"], { timeout: CMD_TIMEOUT_MS }),
     ]);
     const temps = JSON.parse(tempRes.stdout) as ISmcReadout;
     const fans = JSON.parse(fanRes.stdout) as ISmcReadout;
