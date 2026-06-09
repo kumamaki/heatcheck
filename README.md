@@ -24,16 +24,16 @@ If the download fails or the sensors can't be read, temperatures and fan speeds 
 ```bash
 git clone <repo-url>
 cd heatcheck
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 ## Development
 
 ```bash
-pnpm dev      # Watch mode (ray develop)
-pnpm build    # Production build
-pnpm lint     # Lint
+npm run dev      # Watch mode (ray develop)
+npm run build    # Production build
+npm run lint     # Lint
 ```
 
 ## License

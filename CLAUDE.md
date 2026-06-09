@@ -7,15 +7,17 @@ A Raycast extension (macOS) that shows what's burning your CPU and spinning your
 ## Commands
 
 ```bash
-pnpm dev       # ray develop — hot-reload into the local Raycast app
-pnpm build     # ray build — production build
-pnpm check     # typecheck + lint — run this as the gate before committing
-pnpm typecheck # tsc --noEmit
-pnpm lint      # ray lint
-pnpm fix-lint  # ray lint --fix
+npm run dev       # ray develop — hot-reload into the local Raycast app
+npm run build     # ray build — production build
+npm run check     # typecheck + lint — run this as the gate before committing
+npm run typecheck # tsc --noEmit
+npm run lint      # ray lint
+npm run fix-lint  # ray lint --fix
 ```
 
-There is no test suite. `ray build`/`ray develop` transpile with esbuild and do **not** typecheck — type errors slip through the build. Run `pnpm check` (or `pnpm typecheck`) to catch them; that is the real gate. ESLint config is `@raycast/eslint-config` (re-exported from `eslint.config.js`).
+This is an **npm** project, not pnpm. Raycast's store tooling requires a `package-lock.json` (the `raycast/extensions` monorepo runs on npm), so the lockfile must stay npm's — `ray publish` rejects an extension without it.
+
+There is no test suite. `ray build`/`ray develop` transpile with esbuild and do **not** typecheck — type errors slip through the build. Run `npm run check` (or `npm run typecheck`) to catch them; that is the real gate. ESLint config is `@raycast/eslint-config` (re-exported from `eslint.config.js`).
 
 `raycast-env.d.ts` is auto-generated from `package.json` — never edit it by hand. To add a command or a preference, edit the `commands` array in `package.json` and the file regenerates on the next `ray` run.
 
