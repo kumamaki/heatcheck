@@ -9,7 +9,7 @@ import {
   confirmAlert,
   showToast,
 } from "@raycast/api";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   buildVerdict,
   ChecksumMismatchError,
@@ -272,8 +272,14 @@ export default function HeatCheck() {
   const [snap, setSnap] = useState<SystemSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [securityAlert, setSecurityAlert] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
   async function load() {
+    // A collection spawns four subprocesses and can outrun the refresh
+    // interval; skip a tick rather than stack overlapping runs (each adds its
+    // own measurable load to the very thing we're measuring).
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       setSnap(await collectSnapshot());
     } catch (err) {
@@ -289,6 +295,7 @@ export default function HeatCheck() {
           "The downloaded sensor binary failed verification — not running it.",
       });
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }
@@ -297,11 +304,11 @@ export default function HeatCheck() {
     load();
   }, []);
 
-  // Auto-refresh every 3s, but never while a checksum alert is up: re-running
+  // Auto-refresh every 4s, but never while a checksum alert is up: re-running
   // load would re-attempt the tampered download on every tick.
   useEffect(() => {
     if (securityAlert) return;
-    const interval = setInterval(load, 3000);
+    const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
   }, [securityAlert]);
 
