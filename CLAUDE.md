@@ -7,13 +7,15 @@ A Raycast extension (macOS) that shows what's burning your CPU and spinning your
 ## Commands
 
 ```bash
-pnpm dev      # ray develop — hot-reload into the local Raycast app
-pnpm build    # ray build — production build
-pnpm lint     # ray lint
-pnpm fix-lint # ray lint --fix
+pnpm dev       # ray develop — hot-reload into the local Raycast app
+pnpm build     # ray build — production build
+pnpm check     # typecheck + lint — run this as the gate before committing
+pnpm typecheck # tsc --noEmit
+pnpm lint      # ray lint
+pnpm fix-lint  # ray lint --fix
 ```
 
-There is no test suite. `tsc` is not run standalone — `ray build`/`ray develop` typecheck as part of their pipeline. ESLint config is `@raycast/eslint-config` (re-exported from `eslint.config.js`).
+There is no test suite. `ray build`/`ray develop` transpile with esbuild and do **not** typecheck — type errors slip through the build. Run `pnpm check` (or `pnpm typecheck`) to catch them; that is the real gate. ESLint config is `@raycast/eslint-config` (re-exported from `eslint.config.js`).
 
 `raycast-env.d.ts` is auto-generated from `package.json` — never edit it by hand. To add a command or a preference, edit the `commands` array in `package.json` and the file regenerates on the next `ray` run.
 
@@ -21,7 +23,7 @@ There is no test suite. `tsc` is not run standalone — `ray build`/`ray develop
 
 Two Raycast `view` commands, each backed by one `.tsx` file whose name matches the command `name` in `package.json` and whose **default export** is the React component:
 
-- `src/heat-check.tsx` — `heat-check` command. A verdict-first `List`: a hero line stating what's going on, then a **Temperatures** section (CPU max + die avg, GPU, SSD, battery — null rows hidden), a **System** section (one row per physical fan with RPM and % of its own rated max, CPU load, power/charging, memory pressure), and top processes, with kill/copy actions and a 3-second auto-refresh. Each row colors by **its own** metric (`tempColor`/`loadColor`/`fanColor`), staying neutral until elevated; only the hero badge carries the overall verdict color. The palette skips yellow (poor light-mode contrast): green → blue → orange → red.
+- `src/heat-check.tsx` — `heat-check` command. A verdict-first `List`: a hero line stating what's going on, then a **Temperatures** section (CPU max + die avg, GPU, SSD, battery — null rows hidden), a **System** section (one row per physical fan with RPM and % of its own rated max, CPU load, power/charging, memory pressure), and top processes, with kill/copy actions and a 4-second auto-refresh (an in-flight guard skips a tick rather than stacking overlapping collections). Each row colors by **its own** metric (`tempColor`/`loadColor`/`fanColor`), staying neutral until elevated; only the hero badge carries the overall verdict color. The palette skips yellow (poor light-mode contrast): green → blue → orange → red.
 - `src/diagnosis.tsx` — `diagnosis` command. Collects the same snapshot, then feeds it (plus the verdict) to Raycast AI (`AI.ask`) for a plain-English explanation. **Requires Raycast Pro.**
 
 `src/system.ts` is the shared data layer — both commands import from it. It owns every shell-out, all the types (`SystemSnapshot`, `TempReadings`, `FanReading`, `Verdict`, `HeatCause`, `ProcessStat`, the level/pressure unions), and the verdict logic. It emits no JSX. Two halves:
