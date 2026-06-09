@@ -23,31 +23,8 @@ type State =
   | { phase: "done"; stats: SystemSnapshot; answer: string }
   | { phase: "error"; message: string; security: boolean };
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-function useSpinner(active: boolean): string {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    if (!active) {
-      setFrame(0);
-      return;
-    }
-    const id = setInterval(
-      () => setFrame((f) => (f + 1) % SPINNER_FRAMES.length),
-      80,
-    );
-    return () => clearInterval(id);
-  }, [active]);
-
-  return active ? SPINNER_FRAMES[frame] : "";
-}
-
 export default function Diagnosis() {
   const [state, setState] = useState<State>({ phase: "collecting" });
-  const spinner = useSpinner(
-    state.phase === "analyzing" || state.phase === "collecting",
-  );
 
   async function run() {
     setState({ phase: "collecting" });
@@ -90,7 +67,7 @@ export default function Diagnosis() {
     return (
       <Detail
         isLoading
-        markdown={`## ${spinner} Collecting system stats…`}
+        markdown="## Collecting system stats…"
         navigationTitle="Heat Check: Diagnosis"
       />
     );
@@ -115,7 +92,7 @@ export default function Diagnosis() {
   const displayStats = formatStatsForDisplay(state.stats);
 
   const markdown = `
-## ${isAnalyzing ? `${spinner} Analyzing…` : "◆ Diagnosis"}
+## ${isAnalyzing ? "Analyzing…" : "◆ Diagnosis"}
 
 ${isAnalyzing ? "*Reading temperatures, fans, and processes…*" : answer}
 
