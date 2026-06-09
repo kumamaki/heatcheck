@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import {
   buildVerdict,
+  ChecksumMismatchError,
   collectSnapshot,
   fanEffortPct,
   type FanReading,
@@ -270,10 +271,23 @@ function ProcessItem({
 export default function HeatCheck() {
   const [snap, setSnap] = useState<SystemSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [securityAlert, setSecurityAlert] = useState<string | null>(null);
 
   async function load() {
     try {
       setSnap(await collectSnapshot());
+    } catch (err) {
+      // A tampered/corrupted sensor binary is a security event, not a transient
+      // read failure — alarm distinctly and stop refreshing. Anything else keeps
+      // the prior behavior (it surfaces as an error rather than being swallowed).
+      if (!(err instanceof ChecksumMismatchError)) throw err;
+      setSecurityAlert(err.message);
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "iSMC checksum mismatch",
+        message:
+          "The downloaded sensor binary failed verification — not running it.",
+      });
     } finally {
       setLoading(false);
     }
@@ -283,11 +297,13 @@ export default function HeatCheck() {
     load();
   }, []);
 
-  // auto-refresh every 3 seconds
+  // Auto-refresh every 3s, but never while a checksum alert is up: re-running
+  // load would re-attempt the tampered download on every tick.
   useEffect(() => {
+    if (securityAlert) return;
     const interval = setInterval(load, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [securityAlert]);
 
   const refreshActions = (
     <ActionPanel>
@@ -299,6 +315,37 @@ export default function HeatCheck() {
       />
     </ActionPanel>
   );
+
+  if (securityAlert) {
+    return (
+      <List navigationTitle="Heat Check" searchBarPlaceholder="">
+        <List.Item
+          title="iSMC checksum mismatch"
+          subtitle="The downloaded sensor binary failed hash verification and was not run"
+          icon={{ source: Icon.ExclamationMark, tintColor: Color.Red }}
+          accessories={[{ tag: { value: "Blocked", color: Color.Red } }]}
+          actions={
+            <ActionPanel>
+              <Action
+                title="Retry Download"
+                icon={Icon.RotateClockwise}
+                onAction={() => {
+                  setSecurityAlert(null);
+                  setLoading(true);
+                  load();
+                }}
+              />
+            </ActionPanel>
+          }
+        />
+        <List.Item
+          title="Details"
+          subtitle={securityAlert}
+          icon={{ source: Icon.Info, tintColor: Color.SecondaryText }}
+        />
+      </List>
+    );
+  }
 
   if (loading || snap === null) {
     return (

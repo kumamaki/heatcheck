@@ -2,6 +2,7 @@ import { AI, Action, ActionPanel, Detail, Icon } from "@raycast/api";
 import { useEffect, useState } from "react";
 import {
   buildVerdict,
+  ChecksumMismatchError,
   collectSnapshot,
   formatStatsForAI,
   formatStatsForDisplay,
@@ -20,7 +21,7 @@ type State =
   | { phase: "collecting" }
   | { phase: "analyzing"; stats: SystemSnapshot }
   | { phase: "done"; stats: SystemSnapshot; answer: string }
-  | { phase: "error"; message: string };
+  | { phase: "error"; message: string; security: boolean };
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -64,8 +65,9 @@ export default function Diagnosis() {
 
       setState({ phase: "done", stats, answer });
     } catch (err) {
+      const security = err instanceof ChecksumMismatchError;
       const message = err instanceof Error ? err.message : String(err);
-      setState({ phase: "error", message });
+      setState({ phase: "error", message, security });
     }
   }
 
@@ -95,9 +97,13 @@ export default function Diagnosis() {
   }
 
   if (state.phase === "error") {
+    const heading = state.security ? "Checksum mismatch" : "Error";
+    const hint = state.security
+      ? "The downloaded iSMC binary does not match its pinned hash, so Heat Check refused to run it. This points to a corrupted download or a tampered release. Sensor data stays off until a clean copy verifies."
+      : "Make sure Raycast AI is enabled in your Raycast Pro settings.";
     return (
       <Detail
-        markdown={`## Error\n\n${state.message}\n\nMake sure Raycast AI is enabled in your Raycast Pro settings.`}
+        markdown={`## ${heading}\n\n${state.message}\n\n${hint}`}
         navigationTitle="Heat Check: Diagnosis"
         actions={actions}
       />

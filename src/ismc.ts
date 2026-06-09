@@ -20,6 +20,20 @@ const TARBALL_URL = `https://github.com/dkorunic/iSMC/releases/download/${VERSIO
 const TARBALL_SHA256 =
   "bc41d966ebb20eabb8a97967b2952febf3fbf888c2174103e869379c8b6542d5";
 
+// The downloaded bytes did not match the hash pinned in source: a corrupted or
+// tampered release from a server we do not control. Thrown distinctly from
+// network failures so callers can surface it loudly — a hash mismatch is a
+// security event, not a reason to degrade quietly.
+export class ChecksumMismatchError extends Error {
+  constructor(
+    readonly expected: string,
+    readonly actual: string,
+  ) {
+    super(`iSMC checksum mismatch: expected <${expected}>, got <${actual}>`);
+    this.name = "ChecksumMismatchError";
+  }
+}
+
 const BIN_DIR = join(environment.supportPath, "bin");
 const BIN_PATH = join(BIN_DIR, `iSMC-${VERSION}`);
 
@@ -76,9 +90,7 @@ async function downloadAndVerify(): Promise<string> {
   const tarball = Buffer.from(await res.arrayBuffer());
   const digest = createHash("sha256").update(tarball).digest("hex");
   if (digest !== TARBALL_SHA256) {
-    throw new Error(
-      `iSMC checksum mismatch: expected <${TARBALL_SHA256}>, got <${digest}>`,
-    );
+    throw new ChecksumMismatchError(TARBALL_SHA256, digest);
   }
 
   await mkdir(BIN_DIR, { recursive: true });

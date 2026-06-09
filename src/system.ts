@@ -1,6 +1,10 @@
 import os from "node:os";
 import { execa } from "execa";
-import { ensureISmc } from "./ismc";
+import { ChecksumMismatchError, ensureISmc } from "./ismc";
+
+// Re-exported so the commands keep a single import boundary (the data layer)
+// while still being able to recognise a tampered-binary failure.
+export { ChecksumMismatchError };
 
 // Every measurement shell-out is bounded so one wedged process can't hang a
 // snapshot (the heat-check view collects on a 3s loop). A timeout makes execa
@@ -255,6 +259,9 @@ async function getSensorData(): Promise<{
       sensorsAvailable: true,
     };
   } catch (err) {
+    // A checksum mismatch is a security event, not graceful-degradation
+    // territory — propagate it so the command can alarm distinctly.
+    if (err instanceof ChecksumMismatchError) throw err;
     // Expected degraded mode: offline on first run (binary not yet cached) or
     // sensors unreadable. The UI surfaces this via sensorsAvailable; not silent.
     const message = err instanceof Error ? err.message : String(err);
