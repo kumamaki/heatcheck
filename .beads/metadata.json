@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "heatcheck",
-  "project_id": "1046f36f-0d27-4fab-b6da-0b3609981808"
-}
