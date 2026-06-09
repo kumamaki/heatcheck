@@ -300,14 +300,13 @@ export default function HeatCheck() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  // Auto-refresh every 4s, but never while a checksum alert is up: re-running
-  // load would re-attempt the tampered download on every tick.
+  // Load on mount and poll every 4s. A checksum alert stops the loop (no load,
+  // no interval) so it can't re-attempt the tampered download; clearing the
+  // alert re-runs this and resumes. load()'s in-flight guard absorbs the
+  // double-call when the loop and the manual retry fire together.
   useEffect(() => {
     if (securityAlert) return;
+    load();
     const interval = setInterval(load, 4000);
     return () => clearInterval(interval);
   }, [securityAlert]);
@@ -336,11 +335,7 @@ export default function HeatCheck() {
               <Action
                 title="Retry Download"
                 icon={Icon.RotateClockwise}
-                onAction={() => {
-                  setSecurityAlert(null);
-                  setLoading(true);
-                  load();
-                }}
+                onAction={() => setSecurityAlert(null)}
               />
             </ActionPanel>
           }

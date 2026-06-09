@@ -9,3 +9,7 @@ dist/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Agent / tooling scratch dirs
+.pi/
+.omo/
